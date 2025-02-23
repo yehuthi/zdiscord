@@ -320,3 +320,67 @@ test "gateway heartbeat buffer set nullable" {
 		slice
 	);
 }
+
+pub const Snowflake = u64;
+
+pub const API = struct {
+	http: *std.http.Client,
+	token: []const u8,
+
+	const BASE = "/api/v10";
+
+	const Self = @This();
+
+	pub fn send(
+		self: *const Self,
+		allocator: std.mem.Allocator,
+		method: std.http.Method,
+		path: []const u8,
+		payload: anytype
+	) !void {
+		const payload_json =
+			try std.json.stringifyAlloc(allocator, payload, .{});
+		std.log.debug("Send to {any} {s}: \"{s}\"", .{ method, path, payload_json });
+		defer allocator.free(payload_json);
+		// TODO: handle response
+		const result = try self.http.fetch(.{
+			.method = method,
+			.headers = .{
+				.authorization = .{ .override = self.token },
+				.content_type = .{ .override = "application/json" },
+			},
+			.location = .{ .uri = std.Uri {
+				.scheme = "https",
+				.host = .{ .raw = "discord.com" },
+				.path = .{ .raw = path },
+			}},
+			.payload = payload_json,
+		});
+		std.log.debug("API send result: {any}", .{result});
+	}
+
+	pub const CreateMessage = struct {
+		content: ?[]const u8 = null,
+		nonce: ?union(enum) {
+			integer: i32,
+			string: []const u8,
+		} = null,
+		tts: ?bool = null,
+		// TODO: embeds, allowed_mentions, message_reference, components
+		sticker_ids: ?[]const Snowflake = null,
+		// TODO: files
+		payload_json: ?[]const u8 = null,
+		// TODO: attachments
+		flags: u32, // TODO: <-
+		enforce_nonce: ?bool = null,
+		// TODO: poll
+
+		pub fn path_buf(buf: []u8, channel: Snowflake) ![]u8 {
+			return std.fmt.bufPrint(
+				buf,
+				BASE ++ "/channels/{d}/messages",
+				.{ channel }
+			);
+		}
+	};
+};
