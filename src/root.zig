@@ -74,7 +74,7 @@ pub const intent = struct {
 };
 
 
-const Identify = struct {
+pub const Identify = struct {
 	/// Authentication token.
 	token: []const u8,
 	/// Gateway Intents you wish to receive.
@@ -95,8 +95,6 @@ pub const Gateway = struct {
 	sequence: ?Sequence = null,
 	heartbeat_interval: Heartbeat = 0,
 	client_mutex: std.Thread.Mutex = .{},
-	// TODO: move out of here
-	identify: Identify,
 
 	const Sequence = i32;
 	const Heartbeat = u16;
@@ -112,7 +110,7 @@ pub const Gateway = struct {
 	}
 
 	pub fn identify_unchecked(self: *Self, data: Identify) !void {
-		var buffer: [1024]u8 = undefined;
+		var buffer: [512]u8 = undefined;
 		var allocator = std.heap.FixedBufferAllocator.init(&buffer);
 		const message = try std.json.stringifyAlloc(
 			allocator.allocator(),
@@ -126,7 +124,7 @@ pub const Gateway = struct {
 		try self.client.writeText(message);
 	}
 
-	pub fn identify_send(self: *Self, data: Identify) !void {
+	pub fn identify(self: *Self, data: Identify) !void {
 		self.client_mutex.lock();
 		defer self.client_mutex.unlock();
 		try self.identify_unchecked(data);
@@ -179,8 +177,6 @@ pub const Gateway = struct {
 
 			const thread = try std.Thread.spawn(.{}, heartbeat_loop, .{ self });
 			thread.detach();
-
-			try self.identify_send(self.identify);
 		}
 
 		std.log.debug("Gateway received message: {s}", .{ message.data });
