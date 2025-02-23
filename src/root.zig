@@ -371,7 +371,7 @@ pub const API = struct {
 		// TODO: files
 		payload_json: ?[]const u8 = null,
 		// TODO: attachments
-		flags: u32, // TODO: <-
+		flags: ?u32 = null, // TODO: <-
 		enforce_nonce: ?bool = null,
 		// TODO: poll
 
