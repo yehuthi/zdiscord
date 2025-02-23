@@ -92,11 +92,12 @@ pub const Identify = struct {
 pub const Gateway = struct {
 	allocator: std.mem.Allocator,
 	client: *websocket.Client,
-	sequence: ?Sequence = null,
+	sequence: Sequence = SEQUENCE_NULL,
 	heartbeat_interval: Heartbeat = 0,
 	client_mutex: std.Thread.Mutex = .{},
 
 	const Sequence = i32;
+	const SEQUENCE_NULL: Sequence = 0;
 	const Heartbeat = u16;
 	const Self = @This();
 
@@ -147,10 +148,16 @@ pub const Gateway = struct {
 			.{ .ignore_unknown_fields = true, });
 		defer json.deinit();
 
-		if (json.value.s) |sequence| {
-			// TODO: should be atomic and only assign when >, given that we'd
-			// probably want to process events in concurrent tasks.
-			self.sequence = sequence;
+		if (json.value.s) |sequence_new| {
+			self.sequence = sequence_new;
+			_ = @atomicRmw(
+				Sequence,
+				&self.sequence,
+				std.builtin.AtomicRmwOp.Max,
+				sequence_new,
+				// TODO: can probably do better than seq_cst
+				std.builtin.AtomicOrder.seq_cst,
+			);
 			std.log.debug(
 				"Gateway received opcode {s} ({d}) message",
 				.{ @tagName(json.value.op), @intFromEnum(json.value.op) }
@@ -194,7 +201,11 @@ pub const Gateway = struct {
 		var heartbeat_scratch: [GatewayHeartbeatBuffer.BUFFER_SIZE]u8 =
 			undefined;
 		while (true) {
-			const message = try heartbeat_buffer.fmt(self.sequence);
+			var sequence_actual: ?Sequence = null;
+			if (self.sequence != SEQUENCE_NULL) {
+				sequence_actual = self.sequence;
+			}
+			const message = try heartbeat_buffer.fmt(sequence_actual);
 			std.log.debug(
 				"Sending heartbeat to gateway (sequence {any}), payload: \"{s}\"",
 				.{ self.sequence, message }
