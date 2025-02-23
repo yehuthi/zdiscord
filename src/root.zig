@@ -383,4 +383,18 @@ pub const API = struct {
 			);
 		}
 	};
+
+	pub fn create_message(
+		self: *const Self,
+		channel: Snowflake,
+		message: CreateMessage
+	) !void {
+		var buf: [128]u8 = undefined;
+		try self.send(
+			self.http.allocator,
+			.POST,
+			try CreateMessage.path_buf(&buf, channel),
+			message,
+		);
+	}
 };
