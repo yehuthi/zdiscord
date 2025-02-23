@@ -181,7 +181,8 @@ pub const Identify = struct {
 		device: []const u8 = library_name,
 	} = .{},
 
-	// TODO: get it from .zon
+	// TODO: get it from .zon (wait for zig 0.14.0?)
+	// https://github.com/ziglang/zig/pull/20271
 	const library_name = "zdiscord";
 };
 
