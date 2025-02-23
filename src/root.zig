@@ -1,6 +1,8 @@
 const std = @import("std");
 const websocket = @import("websocket");
 
+pub const gateway = @import("./gateway.zig");
+
 /// Extracts a substring from the input string that starts after the first
 /// occurrence of `start` and ends before the next occurrence of `end`.
 /// Returns null if not found.
@@ -28,73 +30,6 @@ test "extract_substring /gateway payload" {
 	);
 }
 
-pub fn ws_gateway_connect(
-	allocator: std.mem.Allocator,
-	opts: struct { timeout_ms: u32 = 5_000 },
-) !websocket.Client {
-	const host = "gateway.discord.gg";
-	var client = try websocket.connect(
-		allocator,
-		host,
-		443,
-		.{ .tls = true },
-	);
-	try client.handshake("/?v=10&encoding=json", .{
-		.timeout_ms = opts.timeout_ms,
-		.headers = "host: " ++ host,
-	});
-	return client;
-}
-
-/// The internal value type for intents.
-pub const Intent = u32;
-
-pub const intent = struct {
-	pub const guilds                        : Intent = 1 <<  0;
-	pub const guild_members                 : Intent = 1 <<  1;
-	pub const guild_moderation              : Intent = 1 <<  2;
-	pub const guild_expressions             : Intent = 1 <<  3;
-	pub const guild_integrations            : Intent = 1 <<  4;
-	pub const guild_webhooks                : Intent = 1 <<  5;
-	pub const guild_invites                 : Intent = 1 <<  6;
-	pub const guild_voice_states            : Intent = 1 <<  7;
-	pub const guild_presence                : Intent = 1 <<  8;
-	pub const guild_messages                : Intent = 1 <<  9;
-	pub const guild_message_reactions       : Intent = 1 << 10;
-	pub const guild_message_typing          : Intent = 1 << 11;
-	pub const direct_messages               : Intent = 1 << 12;
-	pub const direct_message_reactions      : Intent = 1 << 13;
-	pub const direct_message_typing         : Intent = 1 << 14;
-	pub const message_content               : Intent = 1 << 15;
-	pub const guild_scheduled_events        : Intent = 1 << 16;
-	pub const auto_moderation_configuration : Intent = 1 << 20;
-	pub const auto_moderation_execution     : Intent = 1 << 21;
-	pub const guild_message_polls           : Intent = 1 << 24;
-	pub const direct_message_polls          : Intent = 1 << 25;
-};
-
-/// Gateway Identify structure.
-///
-/// See: https://discord.com/developers/docs/events/gateway-events#identify-identify-structure
-pub const Identify = struct {
-	/// Authentication token.
-	token: []const u8,
-	/// Gateway Intents you wish to receive.
-	intents: Intent,
-	/// Connection properties.
-	properties: struct {
-		/// Your operating system.
-		os: []const u8 = "TempleOS",
-		/// Your library name.
-		browser: []const u8 = library_name,
-		/// Your library name.
-		device: []const u8 = library_name,
-	} = .{},
-
-	// TODO: get it from .zon
-	const library_name = "zdiscord";
-};
-
 pub const Gateway = struct {
 	allocator: std.mem.Allocator,
 	client: *websocket.Client,
@@ -116,12 +51,12 @@ pub const Gateway = struct {
 		return self.client.readLoopInNewThread(self);
 	}
 
-	pub fn identify_unchecked(self: *Self, data: Identify) !void {
+	pub fn identify_unchecked(self: *Self, data: gateway.Identify) !void {
 		var buffer: [512]u8 = undefined;
 		var allocator = std.heap.FixedBufferAllocator.init(&buffer);
 		const message = try std.json.stringifyAlloc(
 			allocator.allocator(),
-			.{ .op = @intFromEnum(GatewayOpcode.identify), .d = data },
+			.{ .op = @intFromEnum(gateway.Opcode.identify), .d = data },
 			.{},
 		);
 		std.log.debug(
@@ -131,7 +66,7 @@ pub const Gateway = struct {
 		try self.client.writeText(message);
 	}
 
-	pub fn identify(self: *Self, data: Identify) !void {
+	pub fn identify(self: *Self, data: gateway.Identify) !void {
 		self.client_mutex.lock();
 		defer self.client_mutex.unlock();
 		try self.identify_unchecked(data);
@@ -145,7 +80,7 @@ pub const Gateway = struct {
 		}
 		const json = try std.json.parseFromSlice(
 			struct {
-				op: GatewayOpcode,
+				op: gateway.Opcode,
 				s: ?Sequence = null,
 				t: ?[]const u8 = null,
 			},
@@ -174,7 +109,7 @@ pub const Gateway = struct {
 			"Gateway received opcode {?} ({d}) message",
 			.{ json.value.op, @intFromEnum(json.value.op) }
 		);
-		if (json.value.op == GatewayOpcode.hello) {
+		if (json.value.op == gateway.Opcode.hello) {
 			const data = try std.json.parseFromSlice(
 				struct { d: struct { heartbeat_interval: Heartbeat } },
 				self.allocator,
@@ -201,10 +136,10 @@ pub const Gateway = struct {
 
 	fn heartbeat_loop(self: *Self) !void {
 		// TODO: check we got ACK for previous heartbeat (if made)
-		var heartbeat_buffer = GatewayHeartbeatBuffer.make();
+		var heartbeat_buffer = gateway.HeartbeatBuffer.make();
 		// client.writeText destroys the message so we'll store a throwaway
 		// copy here for it.
-		var heartbeat_scratch: [GatewayHeartbeatBuffer.BUFFER_SIZE]u8 =
+		var heartbeat_scratch: [gateway.HeartbeatBuffer.BUFFER_SIZE]u8 =
 			undefined;
 		while (true) {
 			var sequence_actual: ?Sequence = null;
@@ -223,103 +158,6 @@ pub const Gateway = struct {
 		std.log.info("Heartbeat loop stopped", .{});
 	}
 };
-
-const GatewayOpcode = enum(u8) {
-	/// An event was dispatched.
-	dispatch = 0,
-	/// Fired periodically by the client to keep the connection alive.
-	heartbeat = 1,
-	/// Starts a new session during the initial handshake.
-	identify = 2,
-	/// Update the client's presence.
-	presence_update = 3,
-	/// Used to join/leave or move between voice channels.
-	voice_state_update = 4,
-	/// Resume a previous session that was disconnected.
-	@"resume" = 6,
-	/// You should attempt to reconnect and resume immediately.
-	reconnect = 7,
-	/// Request information about offline guild members in a large guild.
-	request_guild_members = 8,
-	/// The session has been invalidated. You should reconnect and identify/resume accordingly.
-	invalid_session = 9,
-	/// Sent immediately after connecting, contains the `heartbeat_interval` to use.
-	hello = 10,
-	/// Sent in response to receiving a heartbeat to acknowledge that it has been received.
-	heartbeat_ack = 11,
-	/// Request information about soundboard sounds in a set of guilds.
-	request_soundboard_sounds = 31,
-};
-
-fn GatewayHeartbeatBufferSized(SIZE: comptime_int) type {
-	if (SIZE <= 0) {
-		@compileError("Gateway heartbeat buffer size must be greater than zero");
-	}
-	return struct {
-		data: [BUFFER_SIZE]u8,
-
-		pub const BUFFER_SIZE = PREFIX.len + SIZE + 1; // prefix + last sequence + '}'
-
-		const PREFIX = "{\"op\":1,\"d\":";
-		const Self = @This();
-
-		pub fn init(self: *Self) void {
-			@memcpy(self.data[0..PREFIX.len], PREFIX);
-		}
-
-		pub fn make() Self {
-			var self = Self { .data = undefined };
-			self.init();
-			return self;
-		}
-
-		pub fn fmt(self: *Self, value: anytype) ![]u8 {
-			comptime {
-				if (@typeInfo(@TypeOf(value)) == .Optional) {
-					if (SIZE < 4) { // not enough room for "null" literal
-						@compileError("Buffer size is too small for nullable (must be at least 4)");
-					}
-				}
-			}
-			const wrote = try std.fmt.bufPrint(
-				self.data[PREFIX.len..],
-				"{?}}}",
-				.{ value }
-			);
-			return self.data[0..PREFIX.len + wrote.len];
-		}
-	};
-}
-
-const GatewayHeartbeatBuffer = GatewayHeartbeatBufferSized(19);
-
-test "gateway heartbeat buffer set" {
-	var buffer = GatewayHeartbeatBufferSized(2).make();
-	const slice = try buffer.fmt(1);
-	try std.testing.expectEqualStrings(
-		"{\"op\":1,\"d\":1}",
-		slice,
-	);
-}
-
-test "gateway heartbeat buffer set shorter" {
-	var buffer = GatewayHeartbeatBufferSized(2).make();
-	_ = try buffer.fmt(22);
-	const slice = try buffer.fmt(1);
-	try std.testing.expectEqualStrings(
-		"{\"op\":1,\"d\":1}",
-		slice
-	);
-}
-
-test "gateway heartbeat buffer set nullable" {
-	var buffer = GatewayHeartbeatBufferSized(4).make();
-	const slice = try buffer.fmt(@as(?u8, null));
-	try std.testing.expectEqualStrings(
-		"{\"op\":1,\"d\":null}",
-		slice
-	);
-}
 
 pub const Snowflake = u64;
 

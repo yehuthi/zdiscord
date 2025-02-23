@@ -1,0 +1,187 @@
+const std = @import("std");
+const websocket = @import("websocket");
+
+// pub fn Gateway(handler: anytype) type {
+// 	_ = handler;
+// 	return struct {
+// 	};
+// }
+
+/// Creates a websocket client, connects it to the gateway and handshakes.
+pub fn connect(
+	allocator: std.mem.Allocator,
+	opts: struct {
+		timeout_ms: u32 = 5_000,
+		comptime host: []const u8 = "gateway.discord.gg",
+		port: u16 = 443,
+		tls: bool = true,
+		comptime encoding: []const u8 = "json",
+		comptime version: []const u8 = "10",
+	},
+) !websocket.Client {
+	var client = try websocket.connect(
+		allocator,
+		opts.host,
+		opts.port,
+		.{ .tls = opts.tls },
+	);
+	try client.handshake("/?v=" ++ opts.version ++ "&encoding=" ++ opts.encoding, .{
+		.timeout_ms = opts.timeout_ms,
+		.headers = "host: " ++ opts.host,
+	});
+	return client;
+}
+
+/// The actual representation for intents.
+pub const Intent = u32;
+pub const intent = struct {
+	pub const guilds                        : Intent = 1 <<  0;
+	pub const guild_members                 : Intent = 1 <<  1;
+	pub const guild_moderation              : Intent = 1 <<  2;
+	pub const guild_expressions             : Intent = 1 <<  3;
+	pub const guild_integrations            : Intent = 1 <<  4;
+	pub const guild_webhooks                : Intent = 1 <<  5;
+	pub const guild_invites                 : Intent = 1 <<  6;
+	pub const guild_voice_states            : Intent = 1 <<  7;
+	pub const guild_presence                : Intent = 1 <<  8;
+	pub const guild_messages                : Intent = 1 <<  9;
+	pub const guild_message_reactions       : Intent = 1 << 10;
+	pub const guild_message_typing          : Intent = 1 << 11;
+	pub const direct_messages               : Intent = 1 << 12;
+	pub const direct_message_reactions      : Intent = 1 << 13;
+	pub const direct_message_typing         : Intent = 1 << 14;
+	pub const message_content               : Intent = 1 << 15;
+	pub const guild_scheduled_events        : Intent = 1 << 16;
+	pub const auto_moderation_configuration : Intent = 1 << 20;
+	pub const auto_moderation_execution     : Intent = 1 << 21;
+	pub const guild_message_polls           : Intent = 1 << 24;
+	pub const direct_message_polls          : Intent = 1 << 25;
+};
+
+/// All gateway events in Discord are tagged with an opcode that denotes the payload type.
+///
+/// See: https://discord.com/developers/docs/topics/opcodes-and-status-codes
+pub const Opcode = enum(u8) {
+	/// An event was dispatched.
+	dispatch = 0,
+	/// Fired periodically by the client to keep the connection alive.
+	heartbeat = 1,
+	/// Starts a new session during the initial handshake.
+	identify = 2,
+	/// Update the client's presence.
+	presence_update = 3,
+	/// Used to join/leave or move between voice channels.
+	voice_state_update = 4,
+	/// Resume a previous session that was disconnected.
+	@"resume" = 6,
+	/// You should attempt to reconnect and resume immediately.
+	reconnect = 7,
+	/// Request information about offline guild members in a large guild.
+	request_guild_members = 8,
+	/// The session has been invalidated. You should reconnect and identify/resume accordingly.
+	invalid_session = 9,
+	/// Sent immediately after connecting, contains the `heartbeat_interval` to use.
+	hello = 10,
+	/// Sent in response to receiving a heartbeat to acknowledge that it has been received.
+	heartbeat_ack = 11,
+	/// Request information about soundboard sounds in a set of guilds.
+	request_soundboard_sounds = 31,
+};
+
+/// A buffer for heartbeat messages.
+/// 
+/// `SIZE` is the number of bytes / "characters" that the payload may
+/// contain (see `HeartbeatBuffer`).
+pub fn HeartbeatBufferSized(SIZE: comptime_int) type {
+	if (SIZE <= 0) {
+		@compileError("Gateway heartbeat buffer size must be greater than zero");
+	}
+	return struct {
+		data: [BUFFER_SIZE]u8,
+
+		pub const BUFFER_SIZE = PREFIX.len + SIZE + 1; // prefix + last sequence + '}'
+
+		const PREFIX = "{\"op\":1,\"d\":";
+		const Self = @This();
+
+		pub fn init(self: *Self) void {
+			@memcpy(self.data[0..PREFIX.len], PREFIX);
+		}
+
+		pub fn make() Self {
+			var self = Self { .data = undefined };
+			self.init();
+			return self;
+		}
+
+		pub fn fmt(self: *Self, value: anytype) ![]u8 {
+			comptime {
+				if (@typeInfo(@TypeOf(value)) == .Optional) {
+					if (SIZE < 4) { // not enough room for "null" literal
+						@compileError("Buffer size is too small for nullable (must be at least 4)");
+					}
+				}
+			}
+			const wrote = try std.fmt.bufPrint(
+				self.data[PREFIX.len..],
+				"{?}}}",
+				.{ value }
+			);
+			return self.data[0..PREFIX.len + wrote.len];
+		}
+	};
+}
+
+/// `HeartbeatBufferSized` with a default size.
+pub const HeartbeatBuffer = HeartbeatBufferSized(19);
+
+test "gateway heartbeat buffer set" {
+	var buffer = HeartbeatBufferSized(2).make();
+	const slice = try buffer.fmt(1);
+	try std.testing.expectEqualStrings(
+		"{\"op\":1,\"d\":1}",
+		slice,
+	);
+}
+
+test "gateway heartbeat buffer set shorter" {
+	var buffer = HeartbeatBufferSized(2).make();
+	_ = try buffer.fmt(22);
+	const slice = try buffer.fmt(1);
+	try std.testing.expectEqualStrings(
+		"{\"op\":1,\"d\":1}",
+		slice
+	);
+}
+
+test "gateway heartbeat buffer set nullable" {
+	var buffer = HeartbeatBufferSized(4).make();
+	const slice = try buffer.fmt(@as(?u8, null));
+	try std.testing.expectEqualStrings(
+		"{\"op\":1,\"d\":null}",
+		slice
+	);
+}
+
+/// Gateway Identify structure.
+///
+/// See: https://discord.com/developers/docs/events/gateway-events#identify-identify-structure
+pub const Identify = struct {
+	/// Authentication token.
+	token: []const u8,
+	/// Gateway Intents you wish to receive.
+	intents: Intent,
+	/// Connection properties.
+	properties: struct {
+		/// Your operating system.
+		os: []const u8 = "TempleOS",
+		/// Your library name.
+		browser: []const u8 = library_name,
+		/// Your library name.
+		device: []const u8 = library_name,
+	} = .{},
+
+	// TODO: get it from .zon
+	const library_name = "zdiscord";
+};
+
