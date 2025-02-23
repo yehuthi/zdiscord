@@ -1,11 +1,206 @@
 const std = @import("std");
 const websocket = @import("websocket");
 
-// pub fn Gateway(handler: anytype) type {
-// 	_ = handler;
-// 	return struct {
-// 	};
-// }
+pub const Client = websocket.Client;
+pub const Message = websocket.Message;
+
+pub const Sequence = u32;
+pub const SEQUENCE_NULL: Sequence = 0;
+
+pub fn Gateway(Handler: type) type {
+	return struct {
+		client: *websocket.Client,
+		handler: Handler,
+
+		const Self = @This();
+
+		pub fn go_spawn(self: *Self) !std.Thread {
+			return self.client.readLoopInNewThread(self);
+		}
+
+		pub fn handle(self: *Self, message: websocket.Message) !void {
+			try self.handler.handle(message);
+		}
+
+		pub fn close(_: *Self) void {}
+
+		pub fn identify(
+			self: *Self,
+			mutex: *std.Thread.Mutex,
+			data: Identify,
+		) !void {
+			var buffer: [512]u8 = undefined;
+			var allocator = std.heap.FixedBufferAllocator.init(&buffer);
+			const message = try std.json.stringifyAlloc(
+				allocator.allocator(),
+				.{ .op = @intFromEnum(Opcode.identify), .d = data },
+				.{},
+			);
+			std.log.debug(
+				"Sending identify to gateway (message: \"{s}\")",
+				.{ message }
+			);
+			mutex.lock();
+			try self.client.writeText(message);
+			mutex.unlock();
+		}
+
+		pub fn disconnect(self: *Self, mutex: *std.Thread.Mutex) !void {
+			mutex.lock();
+			self.client.closeWithCode(1000);
+			mutex.unlock();
+		}
+	};
+}
+
+pub const middleware = struct {
+	pub fn MessageText(Inner: type) type {
+		return struct {
+			inner: Inner,
+
+			pub fn handle(self: *@This(), message: Message) !void {
+				if (message.type != .text) {
+					std.log.warn(
+						"Gateway received a non-message ({s}); ignoring",
+						.{ @tagName(message.type) }
+					);
+				}
+				try self.inner.handle(message.data);
+			}
+		};
+	}
+
+	pub fn Destruct(Inner: type) type {
+		return struct {
+			inner: Inner,
+			allocator: std.mem.Allocator,
+
+			pub const Value = struct {
+				op: u8,
+				s: ?u32,
+				message: []const u8,
+			};
+
+			pub fn handle(self: *@This(), message: []const u8) !void {
+				const data = try std.json.parseFromSlice(
+					struct { op: u8, s: ?u32 = null },
+					self.allocator,
+					message,
+					.{ .ignore_unknown_fields = true },
+				);
+				defer data.deinit();
+
+				try self.inner.handle(.{
+					.message = message,
+					.op = data.value.op,
+					.s = data.value.s,
+				});
+			}
+		};
+	}
+
+	pub fn Json(Inner: type) type { return MessageText(Destruct(Inner)); }
+	pub fn json(
+		inner: anytype,
+		allocator: std.mem.Allocator
+	) Json(@TypeOf(inner)) {
+		return .{ // text
+			.inner = .{ // destruct
+				.inner = inner,
+				.allocator = allocator,
+			},
+		};
+	}
+
+	pub fn SequenceUpdate(Inner: type) type {
+		return struct {
+			inner: Inner,
+			sequence: *Sequence,
+
+			fn handle(self: *@This(), message: anytype) !void {
+				if (message.s) |sequence_new| {
+					_ = @atomicRmw(
+						Sequence, self.sequence,
+						.Max, sequence_new,
+						// TODO: can probably do better than seq_cst
+						std.builtin.AtomicOrder.seq_cst,
+					);
+				}
+				try self.inner.handle(message);
+			}
+		};
+	}
+
+	pub fn Heartbeat(Inner: type) type {
+		// TODO: check we got ACK for previous heartbeat (if made)
+		return struct {
+			inner: Inner,
+			client: *Client,
+			client_mutex: *std.Thread.Mutex,
+			allocator: std.mem.Allocator,
+			thread: ?std.Thread = null,
+			interval_ms: u64 = 0,
+			sequence: *Sequence,
+			heartbeat_buffer: HeartbeatBuffer = HeartbeatBuffer.make(),
+
+			fn handle(self: *@This(), message: anytype) !void {
+				if (message.op == @intFromEnum(Opcode.hello)) {
+					{
+						const data = try std.json.parseFromSlice(
+							struct { d: struct { heartbeat_interval: u32 } },
+							self.allocator,
+							message.message,
+							.{ .ignore_unknown_fields = true },
+						);
+						defer data.deinit();
+						self.interval_ms = data.value.d.heartbeat_interval;
+					}
+					std.debug.assert(self.thread == null); // TODO: bad assumption
+					self.thread = try std.Thread.spawn(
+						.{},
+						loop,
+						.{self},
+					);
+				}
+				else if (message.op == @intFromEnum(Opcode.heartbeat)) {
+					try self.beat();
+				}
+				try self.inner.handle(message);
+			}
+
+			fn loop(self: *@This()) !void {
+				while (true) {
+					try self.beat();
+					std.time.sleep(
+						@as(u64, self.interval_ms) * std.time.ns_per_ms
+					);
+				}
+				std.log.info("Heartbeat loop stopped", .{});
+			}
+
+			fn beat(self: *@This()) !void {
+				// client.writeText destroys the message so we'll store a throwaway
+				// copy here for it.
+				var heartbeat_scratch: [HeartbeatBuffer.BUFFER_SIZE]u8 =
+					undefined;
+				var sequence_actual: ?Sequence = null;
+				if (self.sequence.* != SEQUENCE_NULL) {
+					sequence_actual = self.sequence.*;
+				}
+				const message = try self.heartbeat_buffer.fmt(sequence_actual);
+				std.log.debug(
+					"Sending heartbeat to gateway (sequence {any}), payload: \"{s}\"",
+					.{ self.sequence, message }
+				);
+				@memcpy(heartbeat_scratch[0..message.len], message);
+				// TODO: lock client
+				self.client_mutex.lock();
+				try self.client.writeText(heartbeat_scratch[0..message.len]);
+				self.client_mutex.unlock();
+			}
+		};
+	}
+};
 
 /// Creates a websocket client, connects it to the gateway and handshakes.
 pub fn connect(
