@@ -73,15 +73,21 @@ pub const intent = struct {
 	pub const direct_message_polls          : Intent = 1 << 25;
 };
 
-
+/// Gateway Identify structure.
+///
+/// See: https://discord.com/developers/docs/events/gateway-events#identify-identify-structure
 pub const Identify = struct {
 	/// Authentication token.
 	token: []const u8,
 	/// Gateway Intents you wish to receive.
 	intents: Intent,
+	/// Connection properties.
 	properties: struct {
+		/// Your operating system.
 		os: []const u8 = "TempleOS",
+		/// Your library name.
 		browser: []const u8 = library_name,
+		/// Your library name.
 		device: []const u8 = library_name,
 	} = .{},
 
