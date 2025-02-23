@@ -46,11 +46,57 @@ pub fn ws_gateway_connect(
 	return client;
 }
 
+/// The internal value type for intents.
+pub const Intent = u32;
+
+pub const intent = struct {
+	pub const guilds                        : Intent = 1 <<  0;
+	pub const guild_members                 : Intent = 1 <<  1;
+	pub const guild_moderation              : Intent = 1 <<  2;
+	pub const guild_expressions             : Intent = 1 <<  3;
+	pub const guild_integrations            : Intent = 1 <<  4;
+	pub const guild_webhooks                : Intent = 1 <<  5;
+	pub const guild_invites                 : Intent = 1 <<  6;
+	pub const guild_voice_states            : Intent = 1 <<  7;
+	pub const guild_presence                : Intent = 1 <<  8;
+	pub const guild_messages                : Intent = 1 <<  9;
+	pub const guild_message_reactions       : Intent = 1 << 10;
+	pub const guild_message_typing          : Intent = 1 << 11;
+	pub const direct_messages               : Intent = 1 << 12;
+	pub const direct_message_reactions      : Intent = 1 << 13;
+	pub const direct_message_typing         : Intent = 1 << 14;
+	pub const message_content               : Intent = 1 << 15;
+	pub const guild_scheduled_events        : Intent = 1 << 16;
+	pub const auto_moderation_configuration : Intent = 1 << 20;
+	pub const auto_moderation_execution     : Intent = 1 << 21;
+	pub const guild_message_polls           : Intent = 1 << 24;
+	pub const direct_message_polls          : Intent = 1 << 25;
+};
+
+
+const Identify = struct {
+	/// Authentication token.
+	token: []const u8,
+	/// Gateway Intents you wish to receive.
+	intents: Intent,
+	properties: struct {
+		os: []const u8 = "TempleOS",
+		browser: []const u8 = library_name,
+		device: []const u8 = library_name,
+	} = .{},
+
+	// TODO: get it from .zon
+	const library_name = "zdiscord";
+};
+
 pub const Gateway = struct {
 	allocator: std.mem.Allocator,
 	client: *websocket.Client,
 	sequence: ?Sequence = null,
 	heartbeat_interval: Heartbeat = 0,
+	client_mutex: std.Thread.Mutex = .{},
+	// TODO: move out of here
+	identify: Identify,
 
 	const Sequence = i32;
 	const Heartbeat = u16;
@@ -63,6 +109,27 @@ pub const Gateway = struct {
 
 	pub fn go_spawn(self: *Self) !std.Thread {
 		return self.client.readLoopInNewThread(self);
+	}
+
+	pub fn identify_unchecked(self: *Self, data: Identify) !void {
+		var buffer: [1024]u8 = undefined;
+		var allocator = std.heap.FixedBufferAllocator.init(&buffer);
+		const message = try std.json.stringifyAlloc(
+			allocator.allocator(),
+			.{ .op = @intFromEnum(GatewayOpcode.identify), .d = data },
+			.{},
+		);
+		std.log.debug(
+			"Sending identify to gateway (message: \"{s}\")",
+			.{ message }
+		);
+		try self.client.writeText(message);
+	}
+
+	pub fn identify_send(self: *Self, data: Identify) !void {
+		self.client_mutex.lock();
+		defer self.client_mutex.unlock();
+		try self.identify_unchecked(data);
 	}
 
 	pub fn handle(self: *Self, message: websocket.Message) !void {
@@ -112,6 +179,8 @@ pub const Gateway = struct {
 
 			const thread = try std.Thread.spawn(.{}, heartbeat_loop, .{ self });
 			thread.detach();
+
+			try self.identify_send(self.identify);
 		}
 
 		std.log.debug("Gateway received message: {s}", .{ message.data });
