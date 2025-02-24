@@ -90,7 +90,9 @@ pub fn Gateway(Handler: type) type {
 			try self.handler.handle(message);
 		}
 
-		pub fn close(_: *Self) void {}
+		pub fn close(_: *Self) void {
+			std.log.info("gateway connection closed", .{});
+		}
 
 		pub fn identify(
 			self: *Self,
