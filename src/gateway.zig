@@ -150,6 +150,31 @@ pub fn Gateway(Handler: type) type {
 }
 
 pub const middleware = struct {
+	pub fn Basic(Handler: type) type {
+		return MessageText(Destruct(SequenceUpdate(Heartbeat(Handler))));
+	}
+	pub fn basic(
+		handler: anytype,
+		allocator: std.mem.Allocator,
+		sequence: *Sequence,
+		client: *Client,
+	) Basic(@TypeOf(handler)) {
+		return .{ // text
+			.inner = .{ // destruct
+				.allocator = allocator,
+				.inner = .{ // sequence
+					.sequence = sequence,
+					.inner = .{ // heartbeat
+						.allocator = allocator,
+						.sequence = sequence,
+						.client = client,
+						.inner = handler, // user handler
+					},
+				},
+			},
+		};
+	}
+
 	pub fn MessageText(Inner: type) type {
 		return struct {
 			inner: Inner,
