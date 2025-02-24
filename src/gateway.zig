@@ -15,7 +15,7 @@ pub const Client = struct {
 	/// Connects to the gateway.
 	pub fn connect(allocator: std.mem.Allocator, opts: ConnectOpts) !Self {
 		return Self {
-			.client = try connect_ws(allocator, opts)),
+			.client = try connect_ws(allocator, opts),
 			.mutex = std.Thread.Mutex {},
 		};
 	}
