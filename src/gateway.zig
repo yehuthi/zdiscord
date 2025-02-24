@@ -47,10 +47,13 @@ pub fn connect(
 		opts.port,
 		.{ .tls = opts.tls },
 	);
-	try client.handshake("/?v=" ++ opts.version ++ "&encoding=" ++ opts.encoding, .{
-		.timeout_ms = opts.timeout_ms,
-		.headers = "host: " ++ opts.host,
-	});
+	try client.handshake(
+		"/?v=" ++ opts.version ++ "&encoding=" ++ opts.encoding,
+		.{
+			.timeout_ms = opts.timeout_ms,
+			.headers = "host: " ++ opts.host,
+		}
+	);
 	return client;
 }
 
@@ -192,7 +195,9 @@ pub const middleware = struct {
 				if (message.op == @intFromEnum(Opcode.hello)) {
 					{
 						const data = try std.json.parseFromSlice(
-							struct { d: struct { heartbeat_interval: u32 } },
+							struct {
+								d: struct { heartbeat_interval: u32 }
+							},
 							self.allocator,
 							message.message,
 							.{ .ignore_unknown_fields = true },
@@ -200,7 +205,8 @@ pub const middleware = struct {
 						defer data.deinit();
 						self.interval_ms = data.value.d.heartbeat_interval;
 					}
-					std.debug.assert(self.thread == null); // TODO: bad assumption
+					// TODO: bad assumption:
+					std.debug.assert(self.thread == null);
 					self.thread = try std.Thread.spawn(
 						.{},
 						loop,
@@ -224,21 +230,25 @@ pub const middleware = struct {
 			}
 
 			fn beat(self: *@This()) !void {
-				// client.writeText destroys the message so we'll store a throwaway
-				// copy here for it.
+				// client.writeText destroys the message so we'll store a
+				// throwaway copy here for it.
 				var heartbeat_scratch: [HeartbeatBuffer.BUFFER_SIZE]u8 =
 					undefined;
 				var sequence_actual: ?Sequence = null;
 				if (self.sequence.* != SEQUENCE_NULL) {
 					sequence_actual = self.sequence.*;
 				}
-				const message = try self.heartbeat_buffer.fmt(sequence_actual);
+				const message =
+					try self.heartbeat_buffer.fmt(sequence_actual);
 				std.log.debug(
-					"Sending heartbeat to gateway (sequence {any}), payload: \"{s}\"",
+					"Sending heartbeat to gateway (sequence {any}), " ++
+					"payload: \"{s}\"",
 					.{ self.sequence, message }
 				);
 				@memcpy(heartbeat_scratch[0..message.len], message);
-				try self.client.write_text(heartbeat_scratch[0..message.len]);
+				try self.client.write_text(
+					heartbeat_scratch[0..message.len]
+				);
 			}
 		};
 	}
@@ -270,9 +280,11 @@ pub const intent = struct {
 	pub const direct_message_polls          : Intent = 1 << 25;
 };
 
-/// All gateway events in Discord are tagged with an opcode that denotes the payload type.
+/// All gateway events in Discord are tagged with an opcode that denotes
+/// the payload type.
 ///
-/// See: https://discord.com/developers/docs/topics/opcodes-and-status-codes
+/// See:
+/// https://discord.com/developers/docs/topics/opcodes-and-status-codes
 pub const Opcode = enum(u8) {
 	/// An event was dispatched.
 	dispatch = 0,
@@ -290,11 +302,14 @@ pub const Opcode = enum(u8) {
 	reconnect = 7,
 	/// Request information about offline guild members in a large guild.
 	request_guild_members = 8,
-	/// The session has been invalidated. You should reconnect and identify/resume accordingly.
+	/// The session has been invalidated. You should reconnect and
+	/// identify/resume accordingly.
 	invalid_session = 9,
-	/// Sent immediately after connecting, contains the `heartbeat_interval` to use.
+	/// Sent immediately after connecting, contains the
+	/// `heartbeat_interval` to use.
 	hello = 10,
-	/// Sent in response to receiving a heartbeat to acknowledge that it has been received.
+	/// Sent in response to receiving a heartbeat to acknowledge that it
+	/// has been received.
 	heartbeat_ack = 11,
 	/// Request information about soundboard sounds in a set of guilds.
 	request_soundboard_sounds = 31,
@@ -306,12 +321,16 @@ pub const Opcode = enum(u8) {
 /// contain (see `HeartbeatBuffer`).
 pub fn HeartbeatBufferSized(SIZE: comptime_int) type {
 	if (SIZE <= 0) {
-		@compileError("Gateway heartbeat buffer size must be greater than zero");
+		@compileError(
+			"Gateway heartbeat buffer size must be " ++
+			"greater than zero"
+		);
 	}
 	return struct {
 		data: [BUFFER_SIZE]u8,
 
-		pub const BUFFER_SIZE = PREFIX.len + SIZE + 1; // prefix + last sequence + '}'
+		// prefix + last sequence + '}'
+		pub const BUFFER_SIZE = PREFIX.len + SIZE + 1;
 
 		const PREFIX = "{\"op\":1,\"d\":";
 		const Self = @This();
@@ -330,7 +349,10 @@ pub fn HeartbeatBufferSized(SIZE: comptime_int) type {
 			comptime {
 				if (@typeInfo(@TypeOf(value)) == .Optional) {
 					if (SIZE < 4) { // not enough room for "null" literal
-						@compileError("Buffer size is too small for nullable (must be at least 4)");
+						@compileError(
+							"Buffer size is too small for " ++
+							"nullable (must be at least 4)"
+						);
 					}
 				}
 			}
