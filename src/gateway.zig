@@ -38,6 +38,32 @@ pub const Client = struct {
 		self.client.closeWithCode(opts.code);
 		self.mutex.unlock();
 	}
+
+	/// Registers a SIGINT (Ctrl+C) handler that disconnects the bot so it
+	/// will appear offline, before terminating the program.
+	///
+	/// Consider it (at least currently) a hacky a convenience function for
+	/// suitable for small programs. It cannot be used for multiple
+	/// connections, and and currently only works for POSIX (doesn't work
+	/// on Windows).
+	pub fn sigint_register(self: *Self) !void {
+		const Handler = struct {
+			var client_global: ?*Client = null;
+			pub fn handler(_: c_int) callconv(.C) void {
+				client_global.?.close(.{});
+			}
+		};
+		Handler.client_global = self;
+		try std.posix.sigaction(
+			std.posix.SIG.INT,
+			&.{
+				.flags = 0,
+				.mask = std.posix.empty_sigset,
+				.handler = .{ .handler = Handler.handler },
+			},
+			null
+		);
+	}
 };
 
 const ConnectOpts = struct {
