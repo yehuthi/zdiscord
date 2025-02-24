@@ -100,7 +100,7 @@ pub fn Gateway(Handler: type) type {
 			var allocator = std.heap.FixedBufferAllocator.init(&buffer);
 			const message = try std.json.stringifyAlloc(
 				allocator.allocator(),
-				.{ .op = @intFromEnum(Opcode.identify), .d = data },
+				.{ .op = opcode.identify, .d = data },
 				.{},
 			);
 			std.log.debug(
@@ -193,7 +193,7 @@ pub const middleware = struct {
 			heartbeat_buffer: HeartbeatBuffer = HeartbeatBuffer.make(),
 
 			fn handle(self: *@This(), message: anytype) !void {
-				if (message.op == @intFromEnum(Opcode.hello)) {
+				if (message.op == opcode.hello) {
 					{
 						const data = try std.json.parseFromSlice(
 							struct {
@@ -214,7 +214,7 @@ pub const middleware = struct {
 						.{self},
 					);
 				}
-				else if (message.op == @intFromEnum(Opcode.heartbeat)) {
+				else if (message.op == opcode.heartbeat) {
 					try self.beat();
 				}
 				try self.inner.handle(message);
@@ -286,34 +286,35 @@ pub const intent = struct {
 ///
 /// See:
 /// https://discord.com/developers/docs/topics/opcodes-and-status-codes
-pub const Opcode = enum(u8) {
+pub const Opcode = u8;
+pub const opcode = struct {
 	/// An event was dispatched.
-	dispatch = 0,
+	const dispatch: Opcode = 0;
 	/// Fired periodically by the client to keep the connection alive.
-	heartbeat = 1,
+	const heartbeat: Opcode = 1;
 	/// Starts a new session during the initial handshake.
-	identify = 2,
+	const identify: Opcode = 2;
 	/// Update the client's presence.
-	presence_update = 3,
+	const presence_update: Opcode = 3;
 	/// Used to join/leave or move between voice channels.
-	voice_state_update = 4,
+	const voice_state_update: Opcode = 4;
 	/// Resume a previous session that was disconnected.
-	@"resume" = 6,
+	const @"resume": Opcode = 6;
 	/// You should attempt to reconnect and resume immediately.
-	reconnect = 7,
+	const reconnect: Opcode = 7;
 	/// Request information about offline guild members in a large guild.
-	request_guild_members = 8,
+	const request_guild_members: Opcode = 8;
 	/// The session has been invalidated. You should reconnect and
 	/// identify/resume accordingly.
-	invalid_session = 9,
+	const invalid_session: Opcode = 9;
 	/// Sent immediately after connecting, contains the
 	/// `heartbeat_interval` to use.
-	hello = 10,
+	const hello: Opcode = 10;
 	/// Sent in response to receiving a heartbeat to acknowledge that it
 	/// has been received.
-	heartbeat_ack = 11,
+	const heartbeat_ack: Opcode = 11;
 	/// Request information about soundboard sounds in a set of guilds.
-	request_soundboard_sounds = 31,
+	const request_soundboard_sounds: Opcode = 31;
 };
 
 /// A buffer for heartbeat messages.
