@@ -113,7 +113,12 @@ pub fn Gateway(Handler: type) type {
 		}
 
 		pub fn handle(self: *Self, message: MessageRaw) !void {
-			try self.handler.handle(message);
+			self.handler.handle(message) catch |e| {
+				std.log.err(
+					"Gateway handler error: {any}; blissfully ignoring",
+					.{ e }
+				);
+			};
 		}
 
 		pub fn close(_: *Self) void {
