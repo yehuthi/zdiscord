@@ -155,19 +155,6 @@ pub const middleware = struct {
 		};
 	}
 
-	pub fn Json(Inner: type) type { return MessageText(Destruct(Inner)); }
-	pub fn json(
-		inner: anytype,
-		allocator: std.mem.Allocator
-	) Json(@TypeOf(inner)) {
-		return .{ // text
-			.inner = .{ // destruct
-				.inner = inner,
-				.allocator = allocator,
-			},
-		};
-	}
-
 	pub fn SequenceUpdate(Inner: type) type {
 		return struct {
 			inner: Inner,
