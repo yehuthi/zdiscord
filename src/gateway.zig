@@ -3,29 +3,36 @@ const websocket = @import("websocket");
 
 pub const MessageRaw = websocket.Message;
 
+/// A gateway (websocket) client with a mutex.
 pub const Client = struct {
+	/// The websocket client.
 	client: websocket.Client,
+	/// The mutex.
 	mutex: std.Thread.Mutex,
 
 	const Self = @This();
 
-	pub fn init(client: websocket.Client) Self {
+	/// Connects to the gateway.
+	pub fn connect(allocator: std.mem.Allocator, opts: ConnectOpts) !Self {
 		return Self {
-			.client = client,
+			.client = try connect_ws(allocator, opts)),
 			.mutex = std.Thread.Mutex {},
 		};
 	}
 
-	pub fn connect(allocator: std.mem.Allocator, opts: ConnectOpts) !Self {
-		return Self.init(try connect_ws(allocator, opts));
-	}
-
+	/// Writes text to the websocket (destroys the given data due to
+	/// websocket masking).
 	pub fn write_text(self: *Self, data: []u8) !void {
 		self.mutex.lock();
 		try self.client.writeText(data);
 		self.mutex.unlock();
 	}
 
+	/// Closes the connection.
+	///
+	/// Use code `1000` or `1001` to disconnect the bot (making it appear
+	/// offline). Use any other code to disconnect the bot but be able to
+	/// Resume.
 	pub fn close(self: *Self, opts: struct { code: u16 = 1000 }) void {
 		self.mutex.lock();
 		self.client.closeWithCode(opts.code);
