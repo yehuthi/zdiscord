@@ -16,6 +16,10 @@ pub const Client = struct {
 		};
 	}
 
+	pub fn connect(allocator: std.mem.Allocator, opts: ConnectOpts) !Self {
+		return Self.init(try connect_ws(allocator, opts));
+	}
+
 	pub fn write_text(self: *Self, data: []u8) !void {
 		self.mutex.lock();
 		try self.client.writeText(data);
@@ -29,17 +33,20 @@ pub const Client = struct {
 	}
 };
 
+const ConnectOpts = struct {
+	timeout_ms: u32 = 5_000,
+	comptime host: []const u8 = "gateway.discord.gg",
+	port: u16 = 443,
+	tls: bool = true,
+	comptime encoding: []const u8 = "json",
+	comptime version: []const u8 = "10",
+};
+
+const connect_ws = connect;
 /// Creates a websocket client, connects it to the gateway and handshakes.
 pub fn connect(
 	allocator: std.mem.Allocator,
-	opts: struct {
-		timeout_ms: u32 = 5_000,
-		comptime host: []const u8 = "gateway.discord.gg",
-		port: u16 = 443,
-		tls: bool = true,
-		comptime encoding: []const u8 = "json",
-		comptime version: []const u8 = "10",
-	},
+	opts: ConnectOpts,
 ) !websocket.Client {
 	var client = try websocket.connect(
 		allocator,
