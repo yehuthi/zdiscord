@@ -1,24 +1,75 @@
 const std = @import("std");
 const websocket = @import("websocket");
 
-pub const Client = websocket.Client;
-pub const Message = websocket.Message;
+pub const MessageRaw = websocket.Message;
+
+pub const Client = struct {
+	client: websocket.Client,
+	mutex: std.Thread.Mutex,
+
+	const Self = @This();
+
+	pub fn init(client: websocket.Client) Self {
+		return Self {
+			.client = client,
+			.mutex = std.Thread.Mutex {},
+		};
+	}
+
+	pub fn write_text(self: *Self, data: []u8) !void {
+		self.mutex.lock();
+		try self.client.writeText(data);
+		self.mutex.unlock();
+	}
+
+	pub fn close(self: *Self, opts: struct { code: u16 = 1000 }) void {
+		self.mutex.lock();
+		self.client.closeWithCode(opts.code);
+		self.mutex.unlock();
+	}
+};
+
+/// Creates a websocket client, connects it to the gateway and handshakes.
+pub fn connect(
+	allocator: std.mem.Allocator,
+	opts: struct {
+		timeout_ms: u32 = 5_000,
+		comptime host: []const u8 = "gateway.discord.gg",
+		port: u16 = 443,
+		tls: bool = true,
+		comptime encoding: []const u8 = "json",
+		comptime version: []const u8 = "10",
+	},
+) !websocket.Client {
+	var client = try websocket.connect(
+		allocator,
+		opts.host,
+		opts.port,
+		.{ .tls = opts.tls },
+	);
+	try client.handshake("/?v=" ++ opts.version ++ "&encoding=" ++ opts.encoding, .{
+		.timeout_ms = opts.timeout_ms,
+		.headers = "host: " ++ opts.host,
+	});
+	return client;
+}
+
 
 pub const Sequence = u32;
 pub const SEQUENCE_NULL: Sequence = 0;
 
 pub fn Gateway(Handler: type) type {
 	return struct {
-		client: *websocket.Client,
+		client: *Client,
 		handler: Handler,
 
 		const Self = @This();
 
 		pub fn go_spawn(self: *Self) !std.Thread {
-			return self.client.readLoopInNewThread(self);
+			return self.client.client.readLoopInNewThread(self);
 		}
 
-		pub fn handle(self: *Self, message: websocket.Message) !void {
+		pub fn handle(self: *Self, message: MessageRaw) !void {
 			try self.handler.handle(message);
 		}
 
@@ -26,7 +77,6 @@ pub fn Gateway(Handler: type) type {
 
 		pub fn identify(
 			self: *Self,
-			mutex: *std.Thread.Mutex,
 			data: Identify,
 		) !void {
 			var buffer: [512]u8 = undefined;
@@ -40,15 +90,11 @@ pub fn Gateway(Handler: type) type {
 				"Sending identify to gateway (message: \"{s}\")",
 				.{ message }
 			);
-			mutex.lock();
-			try self.client.writeText(message);
-			mutex.unlock();
+			try self.client.write_text(message);
 		}
 
-		pub fn disconnect(self: *Self, mutex: *std.Thread.Mutex) !void {
-			mutex.lock();
-			self.client.closeWithCode(1000);
-			mutex.unlock();
+		pub fn disconnect(self: *Self) !void {
+			self.client.close(.{});
 		}
 	};
 }
@@ -58,7 +104,7 @@ pub const middleware = struct {
 		return struct {
 			inner: Inner,
 
-			pub fn handle(self: *@This(), message: Message) !void {
+			pub fn handle(self: *@This(), message: MessageRaw) !void {
 				if (message.type != .text) {
 					std.log.warn(
 						"Gateway received a non-message ({s}); ignoring",
@@ -136,7 +182,6 @@ pub const middleware = struct {
 		return struct {
 			inner: Inner,
 			client: *Client,
-			client_mutex: *std.Thread.Mutex,
 			allocator: std.mem.Allocator,
 			thread: ?std.Thread = null,
 			interval_ms: u64 = 0,
@@ -193,39 +238,11 @@ pub const middleware = struct {
 					.{ self.sequence, message }
 				);
 				@memcpy(heartbeat_scratch[0..message.len], message);
-				// TODO: lock client
-				self.client_mutex.lock();
-				try self.client.writeText(heartbeat_scratch[0..message.len]);
-				self.client_mutex.unlock();
+				try self.client.write_text(heartbeat_scratch[0..message.len]);
 			}
 		};
 	}
 };
-
-/// Creates a websocket client, connects it to the gateway and handshakes.
-pub fn connect(
-	allocator: std.mem.Allocator,
-	opts: struct {
-		timeout_ms: u32 = 5_000,
-		comptime host: []const u8 = "gateway.discord.gg",
-		port: u16 = 443,
-		tls: bool = true,
-		comptime encoding: []const u8 = "json",
-		comptime version: []const u8 = "10",
-	},
-) !websocket.Client {
-	var client = try websocket.connect(
-		allocator,
-		opts.host,
-		opts.port,
-		.{ .tls = opts.tls },
-	);
-	try client.handshake("/?v=" ++ opts.version ++ "&encoding=" ++ opts.encoding, .{
-		.timeout_ms = opts.timeout_ms,
-		.headers = "host: " ++ opts.host,
-	});
-	return client;
-}
 
 /// The actual representation for intents.
 pub const Intent = u32;
