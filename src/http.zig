@@ -57,23 +57,34 @@ pub const API = struct {
 
 	const Self = @This();
 
-	pub fn send(
+
+	pub const SendOpts = struct {
+		// have to do this:
+		// "Client requests that do not have a valid User Agent
+		// specified may be blocked and return a Cloudflare error."
+		user_agent: []const u8 = "DiscordBot (http://corndog.io, 1)",
+		response_storage: std.http.Client.FetchOptions.ResponseStorage
+			= .ignore,
+	};
+
+	pub fn send_raw(
 		self: *const Self,
 		allocator: std.mem.Allocator,
 		method: std.http.Method,
 		path: []const u8,
-		payload: anytype
+		payload: anytype,
+		opts: SendOpts,
 	) !void {
 		const payload_json =
 			try std.json.stringifyAlloc(allocator, payload, .{});
 		std.log.debug("Send to {any} {s}: \"{s}\"", .{ method, path, payload_json });
 		defer allocator.free(payload_json);
-		// TODO: handle response
 		const result = try self.http.fetch(.{
 			.method = method,
 			.headers = .{
 				.authorization = .{ .override = self.token },
 				.content_type = .{ .override = "application/json" },
+				.user_agent = .{ .override = opts.user_agent },
 			},
 			.location = .{ .uri = std.Uri {
 				.scheme = "https",
@@ -81,8 +92,51 @@ pub const API = struct {
 				.path = .{ .raw = path },
 			}},
 			.payload = payload_json,
+			.response_storage = opts.response_storage,
 		});
 		std.log.debug("API send result: {any}", .{result});
+	}
+
+
+	pub fn send(
+		self: *const Self,
+		allocator: std.mem.Allocator,
+		comptime path: []const u8,
+		path_args: anytype,
+		payload: anytype,
+		opts: SendOpts,
+	) !void {
+		const endpoint = comptime send_path_parse(path) catch |e| {
+			@compileLog("send path format error: {any}", .{e});
+			@compileError("send path format error");
+		};
+		var path_buffer: [256]u8 = undefined;
+		const path_actual = try std.fmt.bufPrint(
+			&path_buffer,
+			"/api/v10" ++ endpoint.path,
+			path_args,
+		);
+		return self.send_raw(
+			allocator,
+			endpoint.method,
+			path_actual, // TODO: add API version
+			payload,
+			opts,
+		);
+	}
+
+	fn send_path_parse(
+		path: []const u8
+	) !struct { method: std.http.Method, path: []const u8 } {
+		var splitter = std.mem.splitScalar(u8, path, ' ');
+		const method_str = splitter.next() orelse return error.missing_part;
+		const path_str = splitter.next() orelse return error.missing_part;
+		if (splitter.next() != null) return error.excess;
+		return .{
+			.method = std.meta.stringToEnum(std.http.Method, method_str)
+				orelse return error.unrecognized_method,
+			.path = path_str,
+		};
 	}
 
 	pub const CreateMessage = struct {
@@ -116,7 +170,7 @@ pub const API = struct {
 		message: CreateMessage
 	) !void {
 		var buf: [128]u8 = undefined;
-		try self.send(
+		try self.send_raw(
 			self.http.allocator,
 			.POST,
 			try CreateMessage.path_buf(&buf, channel),
@@ -124,3 +178,18 @@ pub const API = struct {
 		);
 	}
 };
+
+test "send path parse" {
+	const result = try API.send_path_parse("GET /");
+	try std.testing.expectEqual(std.http.Method.GET, result.method);
+	try std.testing.expectEqualStrings("/", result.path);
+}
+
+test "send path parse (create message)" {
+	const result = try API.send_path_parse("POST /channels/{d}/messages");
+	try std.testing.expectEqual(std.http.Method.POST, result.method);
+	try std.testing.expectEqualStrings(
+		"/channels/{d}/messages",
+		result.path,
+	);
+}
