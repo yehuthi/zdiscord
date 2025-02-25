@@ -261,7 +261,16 @@ pub const middleware = struct {
 			sequence: *Sequence,
 			heartbeat_buffer: HeartbeatBuffer = HeartbeatBuffer.make(),
 
-			fn handle(self: *@This(), message: anytype) !void {
+			signal_condition: std.Thread.Condition = .{},
+			signal_mutex: std.Thread.Mutex = .{},
+			signal: ?enum {
+				restart,
+				kill,
+			} = null,
+
+			const Self = @This();
+
+			fn handle(self: *Self, message: anytype) !void {
 				if (message.op == opcode.hello) {
 					{
 						const data = try std.json.parseFromSlice(
@@ -275,13 +284,18 @@ pub const middleware = struct {
 						defer data.deinit();
 						self.interval_ms = data.value.d.heartbeat_interval;
 					}
-					// TODO: bad assumption:
-					std.debug.assert(self.thread == null);
-					self.thread = try std.Thread.spawn(
-						.{},
-						loop,
-						.{self},
-					);
+
+					if (self.thread != null) {
+						// shouldn't be the case ever, but if it is then
+						// just restart
+						self.restart_cold();
+					} else {
+						self.thread = try std.Thread.spawn(
+							.{},
+							loop,
+							.{ self },
+						);
+					}
 				}
 				else if (message.op == opcode.heartbeat) {
 					try self.beat();
@@ -289,17 +303,48 @@ pub const middleware = struct {
 				try self.inner.handle(message);
 			}
 
-			fn loop(self: *@This()) !void {
+			fn loop(self: *Self) !void {
 				while (true) {
 					try self.beat();
-					std.time.sleep(
-						@as(u64, self.interval_ms) * std.time.ns_per_ms
-					);
+					{
+						self.signal_mutex.lock();
+						defer self.signal_mutex.unlock();
+						const result = self.signal_condition.timedWait(
+							&self.signal_mutex,
+							self.interval_ms * std.time.ns_per_ms,
+						);
+						if (result != error.Timeout) {
+							defer self.signal = null;
+							std.log.info(
+								"Heartbeat thread received signal {any}",
+								.{ self.signal },
+							);
+							switch (self.signal orelse unreachable) {
+								.kill => break,
+								.restart => continue,
+							}
+						}
+					}
 				}
 				std.log.info("Heartbeat loop stopped", .{});
 			}
 
-			fn beat(self: *@This()) !void {
+			fn signal_broadcast(
+				self: *Self,
+				sig: @TypeOf(self.signal)
+			) void {
+				self.signal_mutex.lock();
+				self.signal = sig;
+				self.signal_condition.broadcast();
+				self.signal_mutex.unlock();
+			}
+
+			fn restart_cold(self: *Self) void {
+				@setCold(true);
+				self.signal_broadcast(.restart);
+			}
+
+			fn beat(self: *Self) !void {
 				// client.writeText destroys the message so we'll store a
 				// throwaway copy here for it.
 				var heartbeat_scratch: [HeartbeatBuffer.BUFFER_SIZE]u8 =
