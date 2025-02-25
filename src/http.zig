@@ -17,6 +17,27 @@ fn extract_substring(
 	return string[start_index..end_index];
 }
 
+pub fn get_gateway_buf(
+	client: *std.http.Client,
+	buf: []u8
+) ![]const u8 {
+	var response = std.ArrayListUnmanaged(u8).initBuffer(buf);
+	const host = "discord.com";
+	const uri = comptime try std.Uri.parse(
+		"https://" ++ host ++ "/api/v10/gateway"
+	);
+	const result = try client.fetch(.{
+		.method = .GET,
+		.location = .{ .uri = uri },
+		.response_storage = .{ .static = &response },
+		.headers = .{ .host = .{ .override = host }}
+	});
+	if (result.status != .ok) return error.status;
+	const wss = extract_substring(response.items, "wss:", "\"")
+		orelse return error.parse;
+	return wss[6..];
+}
+
 test "extract_substring /gateway payload" {
 	try std.testing.expectEqualStrings(
 		"wss://gateway.discord.gg",
