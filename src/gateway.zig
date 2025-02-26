@@ -411,32 +411,32 @@ pub const intent = struct {
 pub const Opcode = u8;
 pub const opcode = struct {
 	/// An event was dispatched.
-	const dispatch: Opcode = 0;
+	pub const dispatch: Opcode = 0;
 	/// Fired periodically by the client to keep the connection alive.
-	const heartbeat: Opcode = 1;
+	pub const heartbeat: Opcode = 1;
 	/// Starts a new session during the initial handshake.
-	const identify: Opcode = 2;
+	pub const identify: Opcode = 2;
 	/// Update the client's presence.
-	const presence_update: Opcode = 3;
+	pub const presence_update: Opcode = 3;
 	/// Used to join/leave or move between voice channels.
-	const voice_state_update: Opcode = 4;
+	pub const voice_state_update: Opcode = 4;
 	/// Resume a previous session that was disconnected.
-	const @"resume": Opcode = 6;
+	pub const @"resume": Opcode = 6;
 	/// You should attempt to reconnect and resume immediately.
-	const reconnect: Opcode = 7;
+	pub const reconnect: Opcode = 7;
 	/// Request information about offline guild members in a large guild.
-	const request_guild_members: Opcode = 8;
+	pub const request_guild_members: Opcode = 8;
 	/// The session has been invalidated. You should reconnect and
 	/// identify/resume accordingly.
-	const invalid_session: Opcode = 9;
+	pub const invalid_session: Opcode = 9;
 	/// Sent immediately after connecting, contains the
 	/// `heartbeat_interval` to use.
-	const hello: Opcode = 10;
+	pub const hello: Opcode = 10;
 	/// Sent in response to receiving a heartbeat to acknowledge that it
 	/// has been received.
-	const heartbeat_ack: Opcode = 11;
+	pub const heartbeat_ack: Opcode = 11;
 	/// Request information about soundboard sounds in a set of guilds.
-	const request_soundboard_sounds: Opcode = 31;
+	pub const request_soundboard_sounds: Opcode = 31;
 };
 
 /// A buffer for heartbeat messages.
