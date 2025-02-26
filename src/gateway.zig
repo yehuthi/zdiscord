@@ -97,8 +97,16 @@ pub fn connect(
 	return client;
 }
 
-
+/// Gateway sequence number.
+///
+/// See https://discord.com/developers/docs/events/gateway#dispatch-events
 pub const Sequence = u32;
+
+/// A `Sequence` value that represents null, for when we don't have one
+/// yet.
+///
+/// This is more useful over optional in this case, because we can
+/// update it atomically.
 pub const SEQUENCE_NULL: Sequence = 0;
 
 pub fn Gateway(Handler: type) type {

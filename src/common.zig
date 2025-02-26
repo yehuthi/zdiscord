@@ -1,5 +1,8 @@
 const std = @import("std");
 
+/// Snowflake ID.
+///
+/// See: https://discord.com/developers/docs/reference#snowflakes
 pub const Snowflake = u64;
 
 /// Gets the snowflake's timestamp in Discord epoch (2015).
