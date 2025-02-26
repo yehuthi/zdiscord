@@ -17,6 +17,17 @@ fn extract_substring(
 	return string[start_index..end_index];
 }
 
+test "extract_substring /gateway payload" {
+	try std.testing.expectEqualStrings(
+		"wss://gateway.discord.gg",
+		extract_substring(
+			"{\"url\":\"wss://gateway.discord.gg\"}",
+			"wss://",
+			"\"",
+		).?,
+	);
+}
+
 pub fn get_gateway_buf(
 	client: *std.http.Client,
 	buf: []u8
@@ -36,17 +47,6 @@ pub fn get_gateway_buf(
 	const wss = extract_substring(response.items, "wss:", "\"")
 		orelse return error.parse;
 	return wss[6..];
-}
-
-test "extract_substring /gateway payload" {
-	try std.testing.expectEqualStrings(
-		"wss://gateway.discord.gg",
-		extract_substring(
-			"{\"url\":\"wss://gateway.discord.gg\"}",
-			"wss://",
-			"\"",
-		).?,
-	);
 }
 
 pub const API = struct {
