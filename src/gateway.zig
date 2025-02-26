@@ -130,7 +130,7 @@ pub fn Gateway(Handler: type) type {
 		}
 
 		pub fn close(_: *Self) void {
-			std.log.info("gateway connection closed", .{});
+			std.log.info("Gateway connection closed", .{});
 		}
 
 		pub fn identify(
