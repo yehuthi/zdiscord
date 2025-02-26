@@ -38,10 +38,10 @@ pub fn get_gateway_buf(
 		"https://" ++ host ++ "/api/v10/gateway"
 	);
 	const result = try client.fetch(.{
-		.method = .GET,
-		.location = .{ .uri = uri },
-		.response_storage = .{ .static = &response },
-		.headers = .{ .host = .{ .override = host }}
+		.method           = .GET,
+		.location         = .{ .uri    = uri                  },
+		.response_storage = .{ .static = &response            },
+		.headers          = .{ .host   = .{ .override = host }},
 	});
 	if (result.status != .ok) return error.status;
 	const wss = extract_substring(response.items, "wss:", "\"")
@@ -78,14 +78,17 @@ pub const API = struct {
 	) !void {
 		const payload_json =
 			try std.json.stringifyAlloc(allocator, payload, .{});
-		std.log.debug("Send to {any} {s}: \"{s}\"", .{ method, path, payload_json });
+		std.log.debug(
+			"Send to {any} {s}: \"{s}\"",
+			.{ method, path, payload_json }
+		);
 		defer allocator.free(payload_json);
 		const result = try self.http.fetch(.{
 			.method = method,
 			.headers = .{
-				.authorization = .{ .override = self.token },
-				.content_type = .{ .override = "application/json" },
-				.user_agent = .{ .override = opts.user_agent },
+				.authorization = .{ .override = self.token         },
+				.content_type  = .{ .override = "application/json" },
+				.user_agent    = .{ .override = opts.user_agent    },
 			},
 			.location = .{ .uri = std.Uri {
 				.scheme = "https",
