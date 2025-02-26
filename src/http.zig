@@ -30,7 +30,7 @@ test "extract_substring /gateway payload" {
 
 pub fn get_gateway_buf(
 	client: *std.http.Client,
-	buf: []u8
+	buf: []u8,
 ) ![]const u8 {
 	var response = std.ArrayListUnmanaged(u8).initBuffer(buf);
 	const host = "discord.com";
@@ -56,7 +56,6 @@ pub const API = struct {
 	const BASE = "/api/v10";
 
 	const Self = @This();
-
 
 	pub const SendOpts = struct {
 		// have to do this:
