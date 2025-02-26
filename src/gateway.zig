@@ -174,6 +174,8 @@ pub const middleware = struct {
 		return MessageText(Destruct(SequenceUpdate(Heartbeat(Handler))));
 	}
 
+	pub const BasicMessage = Destruct(void).Value;
+
 	pub fn basic(
 		handler: anytype,
 		data: *Basic,
@@ -218,12 +220,13 @@ pub const middleware = struct {
 			pub const Value = struct {
 				op: u8,
 				s: ?u32,
+				t: ?[]const u8,
 				message: []const u8,
 			};
 
 			pub fn handle(self: *@This(), message: []const u8) !void {
 				const data = try std.json.parseFromSlice(
-					struct { op: u8, s: ?u32 = null },
+					struct { op: u8, s: ?u32 = null, t: ?[]const u8 },
 					self.allocator,
 					message,
 					.{ .ignore_unknown_fields = true },
@@ -234,6 +237,7 @@ pub const middleware = struct {
 					.message = message,
 					.op = data.value.op,
 					.s = data.value.s,
+					.t = data.value.t,
 				});
 			}
 		};
