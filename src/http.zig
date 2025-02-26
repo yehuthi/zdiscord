@@ -119,7 +119,7 @@ pub const API = struct {
 		return self.send_raw(
 			allocator,
 			endpoint.method,
-			path_actual, // TODO: add API version
+			path_actual,
 			payload,
 			opts,
 		);
