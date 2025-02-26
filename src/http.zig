@@ -65,6 +65,7 @@ pub const API = struct {
 		user_agent: []const u8 = "DiscordBot (http://corndog.io, 1)",
 		response_storage: std.http.Client.FetchOptions.ResponseStorage
 			= .ignore,
+		host: []const u8 = "discord.com",
 	};
 
 	pub fn send_raw(
@@ -88,7 +89,7 @@ pub const API = struct {
 			},
 			.location = .{ .uri = std.Uri {
 				.scheme = "https",
-				.host = .{ .raw = "discord.com" },
+				.host = .{ .raw = opts.host },
 				.path = .{ .raw = path },
 			}},
 			.payload = payload_json,
@@ -129,12 +130,13 @@ pub const API = struct {
 		path: []const u8
 	) !struct { method: std.http.Method, path: []const u8 } {
 		var splitter = std.mem.splitScalar(u8, path, ' ');
-		const method_str = splitter.next() orelse return error.missing_part;
-		const path_str = splitter.next() orelse return error.missing_part;
+		const method_str = splitter.next() orelse unreachable;
+		const method = std.meta.stringToEnum(std.http.Method, method_str)
+			orelse return error.method_bad;
+		const path_str = splitter.next() orelse return error.path_missing;
 		if (splitter.next() != null) return error.excess;
 		return .{
-			.method = std.meta.stringToEnum(std.http.Method, method_str)
-				orelse return error.unrecognized_method,
+			.method = method,
 			.path = path_str,
 		};
 	}
@@ -191,5 +193,19 @@ test "send path parse (create message)" {
 	try std.testing.expectEqualStrings(
 		"/channels/{d}/messages",
 		result.path,
+	);
+}
+
+test "send path parse bad method" {
+	try std.testing.expectEqual(
+		error.method_bad,
+		API.send_path_parse("MEOW /"),
+	);
+}
+
+test "send path parse path missing" {
+	try std.testing.expectEqual(
+		error.path_missing,
+		API.send_path_parse("GET"),
 	);
 }
