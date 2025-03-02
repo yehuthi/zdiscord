@@ -10,7 +10,7 @@ pub fn SendOut(Data: type) type {
 
 pub const SendInSpecial = union(enum) { nil, raw: []const u8 };
 
-pub inline fn send(
+pub fn send(
 	client: *std.http.Client,
 	comptime path_fmt: []const u8,
 	path_args: anytype,
