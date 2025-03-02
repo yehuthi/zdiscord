@@ -1,213 +1,172 @@
 const std = @import("std");
-const com = @import("./common.zig");
+// const com = @import("./common.zig");
 
-/// Extracts a substring from the input string that starts after the first
-/// occurrence of `start` and ends before the next occurrence of `end`.
-/// Returns null if not found.
-fn extract_substring(
-	string: []const u8,
-	start: []const u8,
-	end: []const u8
-) ?[]const u8 {
-	const start_index = std.mem.indexOf(u8, string, start)
-		orelse return null;
-	const end_index =
-		std.mem.indexOfPosLinear(u8, string, start_index + start.len, end)
-		orelse return null;
-	return string[start_index..end_index];
-}
-
-test "extract_substring /gateway payload" {
-	try std.testing.expectEqualStrings(
-		"wss://gateway.discord.gg",
-		extract_substring(
-			"{\"url\":\"wss://gateway.discord.gg\"}",
-			"wss://",
-			"\"",
-		).?,
-	);
-}
-
-pub fn get_gateway_buf(
-	client: *std.http.Client,
-	buf: []u8,
-) ![]const u8 {
-	var response = std.ArrayListUnmanaged(u8).initBuffer(buf);
-	const host = "discord.com";
-	const uri = comptime try std.Uri.parse(
-		"https://" ++ host ++ "/api/v10/gateway"
-	);
-	const result = try client.fetch(.{
-		.method           = .GET,
-		.location         = .{ .uri    = uri                  },
-		.response_storage = .{ .static = &response            },
-		.headers          = .{ .host   = .{ .override = host }},
-	});
-	if (result.status != .ok) return error.status;
-	const wss = extract_substring(response.items, "wss:", "\"")
-		orelse return error.parse;
-	return wss[6..];
-}
-
-pub const API = struct {
-	http: *std.http.Client,
-	token: []const u8,
-
-	const BASE = "/api/v10";
-
-	const Self = @This();
-
-	pub const SendOpts = struct {
-		// have to do this:
-		// "Client requests that do not have a valid User Agent
-		// specified may be blocked and return a Cloudflare error."
-		user_agent: []const u8 = "DiscordBot (http://corndog.io, 1)",
-		response_storage: std.http.Client.FetchOptions.ResponseStorage
-			= .ignore,
-		host: []const u8 = "discord.com",
+pub fn SendOut(Data: type) type {
+	return struct {
+		status: std.http.Status,
+		data: ?std.json.Parsed(Data),
 	};
+}
 
-	pub fn send_raw(
-		self: *const Self,
+pub const SendInSpecial = union(enum) { nil, raw: []const u8 };
+
+pub inline fn send(
+	client: *std.http.Client,
+	comptime path_fmt: []const u8,
+	path_args: anytype,
+	opts: struct {
 		allocator: std.mem.Allocator,
-		method: std.http.Method,
-		path: []const u8,
-		payload: anytype,
-		opts: SendOpts,
-	) !void {
-		const payload_json =
-			try std.json.stringifyAlloc(allocator, payload, .{});
-		std.log.debug(
-			"Send to {any} {s}: \"{s}\"",
-			.{ method, path, payload_json }
-		);
-		defer allocator.free(payload_json);
-		const result = try self.http.fetch(.{
-			.method = method,
-			.headers = .{
-				.authorization = .{ .override = self.token         },
-				.content_type  = .{ .override = "application/json" },
-				.user_agent    = .{ .override = opts.user_agent    },
+		token: ?[]const u8 = null,
+		stringify_options: std.json.StringifyOptions = .{},
+		parse_options: std.json.ParseOptions = .{
+			.ignore_unknown_fields = true
+		},
+		user_agent: []const u8 = "DiscordBot (http://corndog.io, 1)",
+	},
+	in: anytype,
+	comptime Out: type,
+) !SendOut(Out) {
+	// path
+	comptime var path_err: PathParseError = undefined;
+	const path_parse = comptime send_path_parse(path_fmt, &path_err) catch {
+		switch (path_err) {
+			.expected_method => |e| {
+				@compileLog("expected method, found \"{s}\"", .{ e.found });
 			},
-			.location = .{ .uri = std.Uri {
-				.scheme = "https",
-				.host = .{ .raw = opts.host },
-				.path = .{ .raw = path },
-			}},
-			.payload = payload_json,
-			.response_storage = opts.response_storage,
-		});
-		std.log.debug("API send result: {any}", .{result});
-	}
-
-
-	pub fn send(
-		self: *const Self,
-		allocator: std.mem.Allocator,
-		comptime path: []const u8,
-		path_args: anytype,
-		payload: anytype,
-		opts: SendOpts,
-	) !void {
-		const endpoint = comptime send_path_parse(path) catch |e| {
-			@compileLog("send path format error: {any}", .{e});
-			@compileError("send path format error");
-		};
-		var path_buffer: [256]u8 = undefined;
-		const path_actual = try std.fmt.bufPrint(
-			&path_buffer,
-			"/api/v10" ++ endpoint.path,
-			path_args,
-		);
-		return self.send_raw(
-			allocator,
-			endpoint.method,
-			path_actual,
-			payload,
-			opts,
-		);
-	}
-
-	fn send_path_parse(
-		path: []const u8
-	) !struct { method: std.http.Method, path: []const u8 } {
-		var splitter = std.mem.splitScalar(u8, path, ' ');
-		const method_str = splitter.next() orelse unreachable;
-		const method = std.meta.stringToEnum(std.http.Method, method_str)
-			orelse return error.method_bad;
-		const path_str = splitter.next() orelse return error.path_missing;
-		if (splitter.next() != null) return error.excess;
-		return .{
-			.method = method,
-			.path = path_str,
-		};
-	}
-
-	pub const CreateMessage = struct {
-		content: ?[]const u8 = null,
-		nonce: ?union(enum) {
-			integer: i32,
-			string: []const u8,
-		} = null,
-		tts: ?bool = null,
-		// TODO: embeds, allowed_mentions, message_reference, components
-		sticker_ids: ?[]const com.Snowflake = null,
-		// TODO: files
-		payload_json: ?[]const u8 = null,
-		// TODO: attachments
-		flags: ?u32 = null, // TODO: <-
-		enforce_nonce: ?bool = null,
-		// TODO: poll
-
-		pub fn path_buf(buf: []u8, channel: com.Snowflake) ![]u8 {
-			return std.fmt.bufPrint(
-				buf,
-				BASE ++ "/channels/{d}/messages",
-				.{ channel }
-			);
+			.expected_path => @compileLog("expected path", .{}),
 		}
 	};
+	comptime var path_buffer: [1024]u8 = undefined;
+	const path = comptime try std.fmt.bufPrint(
+		&path_buffer,
+		path_parse.path,
+		path_args
+	);
+	const method = path_parse.method;
 
-	pub fn create_message(
-		self: *const Self,
-		channel: com.Snowflake,
-		message: CreateMessage
-	) !void {
-		var buf: [128]u8 = undefined;
-		try self.send_raw(
-			self.http.allocator,
-			.POST,
-			try CreateMessage.path_buf(&buf, channel),
-			message,
+	// in
+	var payload: ?[]const u8 = null;
+	var payload_alloc = false;
+	if (@TypeOf(in) == SendInSpecial) {
+		switch (in) {
+			.nil => {},
+			.raw => |raw| payload = raw,
+		}
+	} else {
+		payload_alloc = true;
+		payload = try std.json.stringifyAlloc(
+			opts.allocator,
+			in,
+			opts.stringify_options,
 		);
 	}
+	defer if (payload_alloc) opts.allocator.free(payload.?);
+
+	// out
+	var storage_data = std.ArrayList(u8).init(opts.allocator);
+	errdefer storage_data.deinit();
+
+	// fetch
+	const host = "discord.com";
+	const uri = std.Uri {
+		.scheme = "https",
+		.host = .{ .raw = host },
+		.path = .{ .raw = "/api/v10" ++ path },
+	};
+	const fetch_result = try client.fetch(.{
+		.method = method,
+		.location = .{
+			.uri = uri,
+		},
+		.headers = .{
+			.host = .{ .override = host },
+			.authorization = if (opts.token) |token| .{ .override = token }
+				else .omit,
+			.user_agent = .{ .override = opts.user_agent },
+			.content_type = .{ .override = "application/json" },
+		},
+		.payload = payload,
+		.response_storage = .{ .dynamic = &storage_data },
+	});
+	const status = fetch_result.status;
+
+	// parse out
+	if (storage_data.items.len > 0) {
+		const json = try std.json.parseFromSlice(
+			Out,
+			opts.allocator,
+			storage_data.items,
+			opts.parse_options,
+		);
+		return .{ .status = status, .data = json };
+	}
+
+	return .{ .status = status, .data = null };
+}
+
+
+const PathParseError = union(enum) {
+	expected_method: struct { found: []const u8 },
+	expected_path,
 };
 
-test "send path parse" {
-	const result = try API.send_path_parse("GET /");
-	try std.testing.expectEqual(std.http.Method.GET, result.method);
-	try std.testing.expectEqualStrings("/", result.path);
+fn send_path_parse(
+	comptime in: []const u8,
+	err: *PathParseError,
+) error{fail}!struct { method: std.http.Method, path: []const u8 } {
+	const separator = std.mem.indexOfScalar(u8, in, ' ') orelse in.len;
+	const method_str = in[0..separator];
+	const method = std.meta.stringToEnum(std.http.Method, method_str)
+		orelse {
+			err.* = .{ .expected_method = .{ .found = method_str } };
+			return error.fail;
+		};
+
+	const path_start = separator + 1; // skip the space
+	if (path_start >= in.len) {
+		err.* = .expected_path;
+		return error.fail;
+	}
+	const path = in[path_start..];
+
+	return .{
+		.method = method,
+		.path = path,
+	};
 }
 
-test "send path parse (create message)" {
-	const result = try API.send_path_parse("POST /channels/{d}/messages");
-	try std.testing.expectEqual(std.http.Method.POST, result.method);
-	try std.testing.expectEqualStrings(
-		"/channels/{d}/messages",
-		result.path,
-	);
-}
-
-test "send path parse bad method" {
+test "path parse expects method" {
+	var err: PathParseError = undefined;
+	// empty
+	try std.testing.expectEqual(error.fail, send_path_parse("", &err));
+	try std.testing.expectEqualStrings("expected_method", @tagName(err));
+	try std.testing.expectEqualStrings("", err.expected_method.found);
+	// unrecognized
+	try std.testing.expectEqual(error.fail, send_path_parse("blah", &err));
+	try std.testing.expectEqualStrings("expected_method", @tagName(err));
+	try std.testing.expectEqualStrings("blah", err.expected_method.found);
+	// unrecognized with path
 	try std.testing.expectEqual(
-		error.method_bad,
-		API.send_path_parse("MEOW /"),
+		error.fail,
+		send_path_parse("blah /path", &err),
 	);
+	try std.testing.expectEqualStrings("expected_method", @tagName(err));
+	try std.testing.expectEqualStrings("blah", err.expected_method.found);
 }
 
-test "send path parse path missing" {
-	try std.testing.expectEqual(
-		error.path_missing,
-		API.send_path_parse("GET"),
-	);
+test "path parse expects path" {
+	var err: PathParseError = undefined;
+	// empty
+	try std.testing.expectEqual(error.fail, send_path_parse("GET", &err));
+	try std.testing.expectEqual(.expected_path, err);
+	// whitespace
+	try std.testing.expectEqual(error.fail, send_path_parse("GET ", &err));
+	try std.testing.expectEqual(.expected_path, err);
+}
+
+test "path parse" {
+	var err: PathParseError = undefined;
+	const result = try send_path_parse("POST /a/b/c", &err);
+	try std.testing.expectEqual(.POST, result.method);
+	try std.testing.expectEqualStrings("/a/b/c", result.path);
 }
