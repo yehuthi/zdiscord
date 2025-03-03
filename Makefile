@@ -1,8 +1,10 @@
 .PHONY: test docs
 
-test: $(wildcard ./src/**/* ./build.zig ./build.zig.zon)
-	zig build test
+SRC=$(shell find ./src -type f -name '*.zig')
 
-docs: $(wildcard ./src/**.*)
+test: ${SRC} ./build.zig ./build.zig.zon
+	zig test ./src/root.zig
+
+docs: ${SRC}
 	mkdir -p ./zig-out
 	zig build-lib -fno-emit-bin -femit-docs=./zig-out ./src/root.zig
