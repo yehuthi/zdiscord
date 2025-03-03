@@ -1,6 +1,34 @@
 const std = @import("std");
 // const com = @import("./common.zig");
 
+pub const Api = struct {
+	client: *std.http.Client,
+	headers: std.http.Client.Request.Headers,
+	allocator: std.mem.Allocator,
+
+	const Self = @This();
+
+	pub fn send(
+		self: *Self,
+		comptime path_fmt: []const u8,
+		path_args: anytype,
+		in: anytype,
+		comptime Out: type,
+	) !SendOut(Out) {
+		return _send(
+			self.client,
+			path_fmt,
+			path_args,
+			.{
+				.allocator = self.allocator,
+				.headers = self.headers,
+			},
+			in,
+			Out,
+		);
+	}
+};
+
 pub fn SendOut(Data: type) type {
 	return struct {
 		status: std.http.Status,
@@ -10,18 +38,33 @@ pub fn SendOut(Data: type) type {
 
 pub const SendInSpecial = union(enum) { nil, raw: []const u8 };
 
-pub fn send(
+pub const BotHeaders = struct {
+	token: ?[]const u8,
+	host: []const u8 = "discord.com",
+	user_agent: []const u8 = "DiscordBot (http://corndog.io, 1)",
+
+	pub fn headers(self: @This()) std.http.Client.Request.Headers {
+		return .{
+			.host         = .{ .override = self.host          },
+			.user_agent   = .{ .override = self.user_agent    },
+			.content_type = .{ .override = "application/json" },
+			.authorization = if (self.token) |value| .{ .override = value }
+				else .omit,
+		};
+	}
+};
+
+fn _send(
 	client: *std.http.Client,
 	comptime path_fmt: []const u8,
 	path_args: anytype,
 	opts: struct {
+		headers: std.http.Client.Request.Headers = .{},
 		allocator: std.mem.Allocator,
-		token: ?[]const u8 = null,
 		stringify_options: std.json.StringifyOptions = .{},
 		parse_options: std.json.ParseOptions = .{
 			.ignore_unknown_fields = true
 		},
-		user_agent: []const u8 = "DiscordBot (http://corndog.io, 1)",
 	},
 	in: anytype,
 	comptime Out: type,
@@ -78,13 +121,7 @@ pub fn send(
 		.location = .{
 			.uri = uri,
 		},
-		.headers = .{
-			.host = .{ .override = host },
-			.authorization = if (opts.token) |token| .{ .override = token }
-				else .omit,
-			.user_agent = .{ .override = opts.user_agent },
-			.content_type = .{ .override = "application/json" },
-		},
+		.headers = opts.headers,
 		.payload = payload,
 		.response_storage = .{ .dynamic = &storage_data },
 	});
