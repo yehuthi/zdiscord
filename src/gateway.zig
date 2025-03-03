@@ -1,3 +1,5 @@
+//! Gateway (events) API.
+
 const std = @import("std");
 const websocket = @import("websocket");
 

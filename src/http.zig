@@ -1,3 +1,5 @@
+///! HTTP API.
+
 const std = @import("std");
 // const com = @import("./common.zig");
 
@@ -38,11 +40,19 @@ pub fn SendOut(Data: type) type {
 
 pub const SendInSpecial = union(enum) { nil, raw: []const u8 };
 
+/// Headers relevant for bots.
 pub const BotHeaders = struct {
+	/// The bot's Authorization token (including the "Bot " prefix).
 	token: ?[]const u8,
 	host: []const u8 = "discord.com",
+	/// The User-Agent header.
+	///
+	/// The [API docs](https://discord.com/developers/docs/reference#user-agent) warns:
+	/// > Client requests that do not have a valid User Agent specified
+	/// > may be blocked and return a Cloudflare error.
 	user_agent: []const u8 = "DiscordBot (http://corndog.io, 1)",
 
+	/// Converts the given `BotHeaders` into `std.http.Client` headers.
 	pub fn headers(self: @This()) std.http.Client.Request.Headers {
 		return .{
 			.host         = .{ .override = self.host          },
