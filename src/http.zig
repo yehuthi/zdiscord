@@ -89,10 +89,10 @@ fn _send(
 			.expected_path => @compileLog("expected path", .{}),
 		}
 	};
-	comptime var path_buffer: [1024]u8 = undefined;
-	const path = comptime try std.fmt.bufPrint(
+	var path_buffer: [1024]u8 = undefined;
+	const path = try std.fmt.bufPrint(
 		&path_buffer,
-		path_parse.path,
+		"/api/v10" ++ path_parse.path,
 		path_args
 	);
 	const method = path_parse.method;
@@ -124,7 +124,7 @@ fn _send(
 	const uri = std.Uri {
 		.scheme = "https",
 		.host = .{ .raw = host },
-		.path = .{ .raw = "/api/v10" ++ path },
+		.path = .{ .raw = path },
 	};
 	const fetch_result = try client.fetch(.{
 		.method = method,
