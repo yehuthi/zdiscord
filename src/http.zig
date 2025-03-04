@@ -31,10 +31,14 @@ pub const Api = struct {
 	}
 };
 
+pub fn SendOutData(Data: type) type {
+	return if (@sizeOf(Data) == 0) struct{} else ?std.json.Parsed(Data);
+}
+
 pub fn SendOut(Data: type) type {
 	return struct {
 		status: std.http.Status,
-		data: ?std.json.Parsed(Data),
+		data: SendOutData(Data),
 	};
 }
 
@@ -133,12 +137,13 @@ fn _send(
 		},
 		.headers = opts.headers,
 		.payload = payload,
-		.response_storage = .{ .dynamic = &storage_data },
+		.response_storage = if (@sizeOf(Out) == 0) .ignore
+			else .{ .dynamic = &storage_data },
 	});
 	const status = fetch_result.status;
 
 	// parse out
-	if (storage_data.items.len > 0) {
+	if (@sizeOf(Out) > 0 and storage_data.items.len > 0) {
 		const json = try std.json.parseFromSlice(
 			Out,
 			opts.allocator,
@@ -148,7 +153,10 @@ fn _send(
 		return .{ .status = status, .data = json };
 	}
 
-	return .{ .status = status, .data = null };
+	return .{
+		.status = status,
+		.data = if (@sizeOf(Out) > 0) null else .{},
+	};
 }
 
 
