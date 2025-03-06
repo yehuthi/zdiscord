@@ -1,0 +1,11 @@
+.{
+    .name = .zdiscord,
+    .version = "0.0.0",
+    .fingerprint = 0x8b0c948fb15d70b4,
+    .minimum_zig_version = "0.14.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
