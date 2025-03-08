@@ -9,24 +9,38 @@ pub const Identify = struct {
 	intents: Intent,
 	os: []const u8 = "TempleOS",
 	lib: []const u8 = "zdiscord",
+
+	pub fn json(self: @This(), allocator: std.mem.Allocator) ![]u8 {
+		return std.json.stringifyAlloc(
+			allocator,
+			.{
+				.op = opcode.identify,
+				.d = .{
+					.token = self.token,
+					.intents = self.intents,
+					.properties = .{
+						.os = self.os,
+						.browser = self.lib,
+						.device = self.lib,
+					},
+				}
+			},
+			.{},
+		);
+	}
 };
 
 pub const Gateway = struct {
+	client: ws.Client = undefined,
+	client_mutex: std.Thread.Mutex = .{},
+	sequence: Sequence = 0,
+
 	const Self = @This();
 
-	pub fn connect(
-		self: *Self,
-		opts: struct {
-			allocator: std.mem.Allocator,
-			identify: Identify,
-		},
-	) !void {
-		_ = self;
+	pub fn connect(self: *Self, allocator: std.mem.Allocator) !void {
 		const host = "gateway.discord.gg";
 
-		var sequence: Sequence = 0;
-		var client_mutex = std.Thread.Mutex {};
-		var client = try ws.Client.init(opts.allocator, .{
+		var client = try ws.Client.init(allocator, .{
 			.tls = true,
 			.port = 443,
 			.host = host,
@@ -36,93 +50,113 @@ pub const Gateway = struct {
 			.headers = "Host: " ++ host,
 		});
 
-		var arena = std.heap.ArenaAllocator.init(opts.allocator);
-		const arena_allocator = arena.allocator();
+		self.client = client;
+	}
 
-		{ // Hello
-			defer _ = arena.reset(.retain_capacity);
-			const hello = next_message_leaky(
-				&client,
-				arena_allocator,
-				struct {
-					d: struct { heartbeat_interval: usize },
-				},
-			) catch |e| switch (e) {
-				error.message_non_text => return error.hello_non_text,
-				else => return e,
-			};
-			std.log.info("heartbeat interval: {d:.2}s", .{
-				@as(f64, @floatFromInt(hello.data.d.heartbeat_interval)) / std.time.ms_per_s
-			});
+	pub fn receive_hello_leaky(
+		self: *Self, arena_allocator: std.mem.Allocator
+	) !usize {
+		const hello = try next_message_leaky(
+			&self.client,
+			arena_allocator,
+			struct {
+				d: struct { heartbeat_interval: usize },
+			},
+		);
+		return hello.data.d.heartbeat_interval;
+	}
 
-			{ // identify
-				defer _ = arena.reset(.retain_capacity);
-				const message = try std.json.stringifyAlloc(
-					arena_allocator,
-					.{
-						.op = opcode.identify,
-						.d = .{
-							.token = opts.identify.token,
-							.intents = opts.identify.intents,
-							.properties = .{
-								.os = opts.identify.os,
-								.browser = opts.identify.lib,
-								.device = opts.identify.lib,
-							},
-						}
-					},
-					.{},
+	pub fn heartbeat_loop(self: *Self, interval: usize) !void {
+		const sleep_interval = interval * std.time.ns_per_ms;
+		var buffer: [64]u8 = undefined;
+		while (true) {
+			const sequence_now = self.sequence;
+			const message = std.fmt.bufPrint(
+				&buffer,
+				"{{\"op\":1,\"d\":{d}}}",
+				.{ sequence_now },
+			) catch unreachable;
+			// TODO: deal with sequence being invalidated in the interim.
+
+			self.client_mutex.lock();
+			std.log.info(
+				"sending heartbeat ({d})",
+				.{ sequence_now },
+			);
+			self.client.write(message) catch |e|
+				std.debug.panic(
+					"heartbeat write failed {any}", .{ e }
 				);
-				try client.write(message);
-			}
+			self.client_mutex.unlock();
 
-			const thread_heartbeat = try std.Thread.spawn(.{}, struct {
-				pub fn f(
-					client_t: *ws.Client,
-					client_mutex_t: *std.Thread.Mutex,
-					sequence_t: *Sequence,
-					heartbeat_interval: usize,
-				) void {
-					const sleep_interval = heartbeat_interval * std.time.ns_per_ms;
-					var buffer: [128]u8 = undefined;
-					while (true) {
-						{
-							const sequence_now = sequence_t.*;
-							const message = std.fmt.bufPrint(
-								&buffer,
-								"{{\"op\":1,\"d\":{d}}}",
-								.{ sequence_now },
-							) catch unreachable;
-							// TODO: deal with sequence being invalidated
-							// in the interim.
-							client_mutex_t.lock();
-							std.log.info("sending heartbeat ({})", .{ sequence_now });
-							client_t.write(message) catch unreachable;
-							defer client_mutex_t.unlock();
-						}
-						std.time.sleep(sleep_interval);
-					}
-				}
-			}.f, .{ &client, &client_mutex, &sequence, hello.data.d.heartbeat_interval });
-			thread_heartbeat.detach();
+			std.time.sleep(sleep_interval);
 		}
+	}
 
+	pub fn go(self: *Self, arena: *std.heap.ArenaAllocator) !void {
+		const arena_allocator = arena.allocator();
 		while (true) {
 			defer _ = arena.reset(.{ .retain_with_limit = 5120 });
 
 			const message = try next_message_leaky(
-				&client, arena_allocator, struct {
+				&self.client, arena_allocator, struct {
 					op: Opcode,
 					s: ?Sequence = null,
 					t: ?[]const u8 = null,
 				}
 			);
-			defer client.done(message.raw);
+			defer self.client.done(message.raw);
 
-			if (message.data.s) |sequence_new| { sequence = sequence_new; }
+			if (message.data.s) |sequence_new| {
+				self.sequence = sequence_new;
+			}
 
 			std.log.info("received {s}", .{ message.raw.data });
 		}
+	}
+
+	pub fn start(
+		self: *Self,
+		opts: struct {
+			allocator: std.mem.Allocator,
+			identify: Identify,
+		},
+	) !void {
+		var arena = std.heap.ArenaAllocator.init(opts.allocator);
+		const arena_allocator = arena.allocator();
+
+		try self.connect(opts.allocator);
+
+		{ // identify
+			defer _ = arena.reset(.retain_capacity);
+			const message = try opts.identify.json(arena_allocator);
+			try self.client.write(message);
+		}
+
+		const heartbeat_interval = blk: {
+			defer _ = arena.reset(.retain_capacity);
+			const heartbeat_interval =
+				self.receive_hello_leaky(arena_allocator) catch |e|
+					switch (e) {
+						error.message_non_text =>
+							return error.hello_non_text,
+						else => return e,
+					};
+			std.log.info("heartbeat interval: {d:.2}s", .{
+				@as(f64, @floatFromInt(heartbeat_interval))
+					/ std.time.ms_per_s
+			});
+			break :blk heartbeat_interval;
+		};
+
+		const thread_heartbeat = try std.Thread.spawn(
+			.{},
+			Self.heartbeat_loop,
+			.{ self, heartbeat_interval }
+		);
+		thread_heartbeat.detach();
+
+		try self.go(&arena);
 	}
 
 	/// Gets the next message from the gateway, JSON-parsed into T.
