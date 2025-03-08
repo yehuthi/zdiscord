@@ -2,6 +2,160 @@
 
 const std = @import("std");
 
+const ws = @import("websocket");
+
+pub const Identify = struct {
+	token: []const u8,
+	intents: Intent,
+	os: []const u8 = "TempleOS",
+	lib: []const u8 = "zdiscord",
+};
+
+pub const Gateway = struct {
+	const Self = @This();
+
+	pub fn connect(
+		self: *Self,
+		opts: struct {
+			allocator: std.mem.Allocator,
+			identify: Identify,
+		},
+	) !void {
+		_ = self;
+		const host = "gateway.discord.gg";
+
+		var sequence: Sequence = 0;
+		var client_mutex = std.Thread.Mutex {};
+		var client = try ws.Client.init(opts.allocator, .{
+			.tls = true,
+			.port = 443,
+			.host = host,
+		});
+		errdefer client.deinit();
+		try client.handshake("/?v=10&encoding=json", .{
+			.headers = "Host: " ++ host,
+		});
+
+		var arena = std.heap.ArenaAllocator.init(opts.allocator);
+		const arena_allocator = arena.allocator();
+
+		{ // Hello
+			defer _ = arena.reset(.retain_capacity);
+			const hello = try next_message_leaky(
+				&client,
+				arena_allocator,
+				struct {
+					d: struct { heartbeat_interval: usize },
+				},
+			);
+			std.log.info("heartbeat interval: {d:.2}s", .{
+				@as(f64, @floatFromInt(hello.data.d.heartbeat_interval)) / std.time.ms_per_s
+			});
+
+			{ // identify
+				defer _ = arena.reset(.retain_capacity);
+				const message = try std.json.stringifyAlloc(
+					arena_allocator,
+					.{
+						.op = opcode.identify,
+						.d = .{
+							.token = opts.identify.token,
+							.intents = opts.identify.intents,
+							.properties = .{
+								.os = opts.identify.os,
+								.browser = opts.identify.lib,
+								.device = opts.identify.lib,
+							},
+						}
+					},
+					.{},
+				);
+				try client.write(message);
+			}
+
+			const thread_heartbeat = try std.Thread.spawn(.{}, struct {
+				pub fn f(
+					client_t: *ws.Client,
+					client_mutex_t: *std.Thread.Mutex,
+					sequence_t: *Sequence,
+					heartbeat_interval: usize,
+				) void {
+					const sleep_interval = heartbeat_interval * std.time.ns_per_ms;
+					var buffer: [128]u8 = undefined;
+					while (true) {
+						{
+							const sequence_now = sequence_t.*;
+							const message = std.fmt.bufPrint(
+								&buffer,
+								"{{\"op\":1,\"d\":{d}}}",
+								.{ sequence_now },
+							) catch unreachable;
+							// TODO: deal with sequence being invalidated
+							// in the interim.
+							client_mutex_t.lock();
+							std.log.info("sending heartbeat ({})", .{ sequence_now });
+							client_t.write(message) catch unreachable;
+							defer client_mutex_t.unlock();
+						}
+						std.time.sleep(sleep_interval);
+					}
+				}
+			}.f, .{ &client, &client_mutex, &sequence, hello.data.d.heartbeat_interval });
+			thread_heartbeat.detach();
+		}
+
+		while (true) {
+			defer _ = arena.reset(.{ .retain_with_limit = 5120 });
+
+			const message = try next_message_leaky(
+				&client, arena_allocator, struct {
+					op: Opcode,
+					s: ?Sequence = null,
+					t: ?[]const u8 = null,
+				}
+			);
+			defer client.done(message.raw);
+
+			if (message.data.s) |sequence_new| { sequence = sequence_new; }
+
+			std.log.info("received {s}", .{ message.raw.data });
+		}
+	}
+
+	fn next_message_leaky(
+		client: *ws.Client,
+		allocator: std.mem.Allocator,
+		@"type": type,
+	) !struct { data: @"type", raw: ws.proto.Message } {
+		const message = try client.read() orelse {
+			return error.read_failure;
+		};
+		defer client.done(message);
+
+		if (message.type != .text) {
+			std.log.warn(
+				"gateway received non-text message: \"{s}\"",
+				.{ std.fmt.fmtSliceHexLower(message.data) },
+			);
+			return error.message_non_text;
+		}
+
+		const parsed = try std.json.parseFromSliceLeaky(
+			@"type",
+			allocator,
+			message.data,
+			.{ .ignore_unknown_fields = true },
+		);
+
+		return .{
+			.data = parsed,
+			.raw = message,
+		};
+	}
+};
+
+pub const Sequence = usize;
+
 /// Gateway opcodes.
 ///
 /// See [Opcodes and Status Codes](https://discord.com/developers/docs/topics/opcodes-and-status-codes).
@@ -104,3 +258,27 @@ pub const close_code = struct {
 	pub const disallowed_intent: CloseCode = 4014;
 };
 
+pub const Intent = u32;
+pub const intent = struct {
+	pub const guilds                        : Intent = 1 <<  0;
+	pub const guild_members                 : Intent = 1 <<  1;
+	pub const guild_moderation              : Intent = 1 <<  2;
+	pub const guild_expressions             : Intent = 1 <<  3;
+	pub const guild_integrations            : Intent = 1 <<  4;
+	pub const guild_webhooks                : Intent = 1 <<  5;
+	pub const guild_invites                 : Intent = 1 <<  6;
+	pub const guild_voice_states            : Intent = 1 <<  7;
+	pub const guild_presence                : Intent = 1 <<  8;
+	pub const guild_messages                : Intent = 1 <<  9;
+	pub const guild_message_reactions       : Intent = 1 << 10;
+	pub const guild_message_typing          : Intent = 1 << 11;
+	pub const direct_messages               : Intent = 1 << 12;
+	pub const direct_message_reactions      : Intent = 1 << 13;
+	pub const direct_message_typing         : Intent = 1 << 14;
+	pub const message_content               : Intent = 1 << 15;
+	pub const guild_scheduled_events        : Intent = 1 << 16;
+	pub const auto_moderation_configuration : Intent = 1 << 20;
+	pub const auto_moderation_execution     : Intent = 1 << 21;
+	pub const guild_message_polls           : Intent = 1 << 24;
+	pub const direct_message_polls          : Intent = 1 << 25;
+};
