@@ -41,13 +41,16 @@ pub const Gateway = struct {
 
 		{ // Hello
 			defer _ = arena.reset(.retain_capacity);
-			const hello = try next_message_leaky(
+			const hello = next_message_leaky(
 				&client,
 				arena_allocator,
 				struct {
 					d: struct { heartbeat_interval: usize },
 				},
-			);
+			) catch |e| switch (e) {
+				error.message_non_text => return error.hello_non_text,
+				else => return e,
+			};
 			std.log.info("heartbeat interval: {d:.2}s", .{
 				@as(f64, @floatFromInt(hello.data.d.heartbeat_interval)) / std.time.ms_per_s
 			});
@@ -122,26 +125,20 @@ pub const Gateway = struct {
 		}
 	}
 
+	/// Gets the next message from the gateway, JSON-parsed into T.
 	fn next_message_leaky(
 		client: *ws.Client,
 		allocator: std.mem.Allocator,
-		@"type": type,
-	) !struct { data: @"type", raw: ws.proto.Message } {
-		const message = try client.read() orelse {
-			return error.read_failure;
-		};
-		defer client.done(message);
+		T: type,
+	) !struct { data: T, raw: ws.proto.Message } {
+		const message = try client.read() orelse
+			unreachable; // there should never be a timeout on the client
+		errdefer client.done(message);
 
-		if (message.type != .text) {
-			std.log.warn(
-				"gateway received non-text message: \"{s}\"",
-				.{ std.fmt.fmtSliceHexLower(message.data) },
-			);
-			return error.message_non_text;
-		}
+		if (message.type != .text) { return error.message_non_text; }
 
 		const parsed = try std.json.parseFromSliceLeaky(
-			@"type",
+			T,
 			allocator,
 			message.data,
 			.{ .ignore_unknown_fields = true },
