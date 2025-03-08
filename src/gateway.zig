@@ -66,29 +66,33 @@ pub const Gateway = struct {
 		return hello.data.d.heartbeat_interval;
 	}
 
+	pub fn heartbeat_locking(self: *Self) !void {
+		const sequence_now = self.sequence;
+
+		var buffer: [64]u8 = undefined;
+		const message = std.fmt.bufPrint(
+			&buffer,
+			"{{\"op\":1,\"d\":{d}}}",
+			.{ sequence_now },
+		) catch unreachable;
+		// TODO: deal with sequence being invalidated in the interim.
+
+		self.client_mutex.lock();
+		std.log.info(
+			"sending heartbeat ({d})",
+			.{ sequence_now },
+		);
+		self.client.write(message) catch |e|
+			std.debug.panic(
+				"heartbeat write failed {any}", .{ e }
+			);
+		self.client_mutex.unlock();
+	}
+
 	pub fn heartbeat_loop(self: *Self, interval: usize) !void {
 		const sleep_interval = interval * std.time.ns_per_ms;
-		var buffer: [64]u8 = undefined;
 		while (true) {
-			const sequence_now = self.sequence;
-			const message = std.fmt.bufPrint(
-				&buffer,
-				"{{\"op\":1,\"d\":{d}}}",
-				.{ sequence_now },
-			) catch unreachable;
-			// TODO: deal with sequence being invalidated in the interim.
-
-			self.client_mutex.lock();
-			std.log.info(
-				"sending heartbeat ({d})",
-				.{ sequence_now },
-			);
-			self.client.write(message) catch |e|
-				std.debug.panic(
-					"heartbeat write failed {any}", .{ e }
-				);
-			self.client_mutex.unlock();
-
+			try self.heartbeat_locking();
 			std.time.sleep(sleep_interval);
 		}
 	}
@@ -107,11 +111,15 @@ pub const Gateway = struct {
 			);
 			defer self.client.done(message.raw);
 
+			std.log.info("received {s}", .{ message.raw.data });
+
+			if (message.data.op == opcode.heartbeat) {
+				try self.heartbeat_locking();
+			}
+
 			if (message.data.s) |sequence_new| {
 				self.sequence = sequence_new;
 			}
-
-			std.log.info("received {s}", .{ message.raw.data });
 		}
 	}
 
