@@ -16,6 +16,8 @@ pub const Identify = struct {
 	lib: []const u8 = "zdiscord",
 
 	/// Stringify into a gateway JSON message (object of `op` and `d`).
+	///
+	/// Caller owns returned memory.
 	pub fn json(self: @This(), allocator: std.mem.Allocator) ![]u8 {
 		return std.json.stringifyAlloc(
 			allocator,
