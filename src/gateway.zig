@@ -39,7 +39,7 @@ pub const Identify = struct {
 pub const Gateway = struct {
 	client: ws.Client = undefined,
 	client_mutex: std.Thread.Mutex = .{},
-	sequence: Sequence = 0,
+	sequence: ?Sequence = null,
 
 	const Self = @This();
 
@@ -78,14 +78,14 @@ pub const Gateway = struct {
 		var buffer: [64]u8 = undefined;
 		const message = std.fmt.bufPrint(
 			&buffer,
-			"{{\"op\":1,\"d\":{d}}}",
+			"{{\"op\":1,\"d\":{?}}}",
 			.{ sequence_now },
 		) catch unreachable;
 		// TODO: deal with sequence being invalidated in the interim.
 
 		self.client_mutex.lock();
 		std.log.info(
-			"sending heartbeat ({d})",
+			"sending heartbeat ({?})",
 			.{ sequence_now },
 		);
 		self.client.write(message) catch |e|
@@ -97,8 +97,14 @@ pub const Gateway = struct {
 
 	pub fn heartbeat_loop(self: *Self, interval: usize) !void {
 		const sleep_interval = interval * std.time.ns_per_ms;
+		var buffer = HeartbeatBuffer.make();
 		while (true) {
-			try self.heartbeat_locking();
+			self.client_mutex.lock();
+			std.log.debug("beating from loop (sequence {?})", .{self.sequence});
+			try self.client.write(
+				try buffer.fmt(self.sequence)
+			);
+			self.client_mutex.unlock();
 			std.time.sleep(sleep_interval);
 		}
 	}
@@ -124,6 +130,7 @@ pub const Gateway = struct {
 			}
 
 			if (message.data.s) |sequence_new| {
+				std.log.debug("updating sequence to {d}", .{ sequence_new });
 				self.sequence = sequence_new;
 			}
 		}
@@ -326,3 +333,91 @@ pub const intent = struct {
 	pub const guild_message_polls           : Intent = 1 << 24;
 	pub const direct_message_polls          : Intent = 1 << 25;
 };
+
+/// A buffer for heartbeat messages.
+/// 
+/// `SIZE` is the number of bytes / "characters" that the payload may
+/// contain (see `HeartbeatBuffer`).
+fn HeartbeatBufferSized(SIZE: comptime_int) type {
+	if (SIZE <= 0) {
+		@compileError(
+			"Gateway heartbeat buffer size must be " ++
+			"greater than zero"
+		);
+	}
+	return struct {
+		data: [BUFFER_SIZE]u8,
+
+		// prefix + last sequence + '}'
+		pub const BUFFER_SIZE = PREFIX.len + SIZE + 1;
+
+		const PREFIX = "{\"op\":1,\"d\":";
+		const Self = @This();
+
+		pub fn init(self: *Self) void {
+			@memcpy(self.data[0..PREFIX.len], PREFIX);
+		}
+
+		pub fn make() Self {
+			var self = Self { .data = undefined };
+			self.init();
+			return self;
+		}
+
+		pub fn fmt(self: *Self, value: anytype) ![]u8 {
+			comptime {
+				if (@typeInfo(@TypeOf(value)) == .optional) {
+					if (SIZE < 4) { // not enough room for "null" literal
+						@compileError(
+							"Buffer size is too small for " ++
+							"nullable (must be at least 4)"
+						);
+					}
+				}
+			}
+			const wrote = try std.fmt.bufPrint(
+				self.data[PREFIX.len..],
+				"{?}}}",
+				.{ value }
+			);
+			std.log.debug("DEBUG WROTE {d}: \"{s}\"", .{ wrote.len, wrote });
+			return self.data[0..PREFIX.len + wrote.len];
+		}
+	};
+}
+
+/// `HeartbeatBufferSized` with a default size.
+pub const HeartbeatBuffer = HeartbeatBufferSized(20);
+
+test "gateway heartbeat buffer set" {
+	var buffer = HeartbeatBufferSized(2).make();
+	const slice = try buffer.fmt(1);
+	try std.testing.expectEqualStrings(
+		"{\"op\":1,\"d\":1}",
+		slice,
+	);
+}
+
+test "gateway heartbeat buffer set shorter" {
+	var buffer = HeartbeatBufferSized(2).make();
+	_ = try buffer.fmt(22);
+	const slice = try buffer.fmt(1);
+	try std.testing.expectEqualStrings(
+		"{\"op\":1,\"d\":1}",
+		slice
+	);
+}
+
+test "gateway heartbeat buffer set nullable" {
+	var buffer = HeartbeatBufferSized(4).make();
+	const slice = try buffer.fmt(@as(?u8, null));
+	try std.testing.expectEqualStrings(
+		"{\"op\":1,\"d\":null}",
+		slice
+	);
+}
+
+test "gateway heartbeat buffer default size can hold u64" {
+	var buffer = HeartbeatBuffer.make();
+	_ = try buffer.fmt(std.math.maxInt(u64));
+}
