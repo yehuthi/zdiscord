@@ -4,40 +4,6 @@ const std = @import("std");
 
 const ws = @import("websocket");
 
-/// [Identify](https://discord.com/developers/docs/events/gateway-events#identify) structure.
-pub const Identify = struct {
-	/// Authentication token.
-	token: []const u8,
-	/// [Gateway Intents](https://discord.com/developers/docs/events/gateway#gateway-intents) you wish to receive.
-	intents: Intent,
-	/// [Connection property](https://discord.com/developers/docs/events/gateway-events#identify-identify-connection-properties) `os` (your operating system)
-	os: []const u8 = "TempleOS",
-	/// [Connection properties](https://discord.com/developers/docs/events/gateway-events#identify-identify-connection-properties) `browser` and `device` (your library name).
-	lib: []const u8 = "zdiscord",
-
-	/// Stringify into a gateway JSON message (object of `op` and `d`).
-	///
-	/// Caller owns returned memory.
-	pub fn json(self: @This(), allocator: std.mem.Allocator) ![]u8 {
-		return std.json.stringifyAlloc(
-			allocator,
-			.{
-				.op = opcode.identify,
-				.d = .{
-					.token = self.token,
-					.intents = self.intents,
-					.properties = .{
-						.os = self.os,
-						.browser = self.lib,
-						.device = self.lib,
-					},
-				}
-			},
-			.{},
-		);
-	}
-};
-
 pub const Gateway = struct {
 	client: ws.Client = undefined,
 	client_mutex: std.Thread.Mutex = .{},
@@ -206,6 +172,41 @@ pub const Gateway = struct {
 		};
 	}
 };
+
+/// [Identify](https://discord.com/developers/docs/events/gateway-events#identify) structure.
+pub const Identify = struct {
+	/// Authentication token.
+	token: []const u8,
+	/// [Gateway Intents](https://discord.com/developers/docs/events/gateway#gateway-intents) you wish to receive.
+	intents: Intent,
+	/// [Connection property](https://discord.com/developers/docs/events/gateway-events#identify-identify-connection-properties) `os` (your operating system)
+	os: []const u8 = "TempleOS",
+	/// [Connection properties](https://discord.com/developers/docs/events/gateway-events#identify-identify-connection-properties) `browser` and `device` (your library name).
+	lib: []const u8 = "zdiscord",
+
+	/// Stringify into a gateway JSON message (object of `op` and `d`).
+	///
+	/// Caller owns returned memory.
+	pub fn json(self: @This(), allocator: std.mem.Allocator) ![]u8 {
+		return std.json.stringifyAlloc(
+			allocator,
+			.{
+				.op = opcode.identify,
+				.d = .{
+					.token = self.token,
+					.intents = self.intents,
+					.properties = .{
+						.os = self.os,
+						.browser = self.lib,
+						.device = self.lib,
+					},
+				}
+			},
+			.{},
+		);
+	}
+};
+
 
 pub const Sequence = usize;
 
