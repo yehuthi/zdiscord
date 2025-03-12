@@ -30,7 +30,7 @@ pub const Gateway = struct {
 	pub fn receive_hello_leaky(
 		self: *Self, arena_allocator: std.mem.Allocator
 	) !usize {
-		const hello = try next_message_leaky(
+		const hello = try next_message_leaky_raw(
 			&self.client,
 			arena_allocator,
 			struct {
@@ -82,7 +82,7 @@ pub const Gateway = struct {
 		while (true) {
 			defer _ = arena.reset(.{ .retain_with_limit = 5120 });
 
-			const message = try next_message_leaky(
+			const message = try next_message_leaky_raw(
 				&self.client, arena_allocator, struct {
 					op: Opcode,
 					s: ?Sequence = null,
@@ -143,12 +143,10 @@ pub const Gateway = struct {
 			.{ self, heartbeat_interval }
 		);
 		thread_heartbeat.detach();
-
-		try self.go(&arena);
 	}
 
 	/// Gets the next message from the gateway, JSON-parsed into T.
-	fn next_message_leaky(
+	fn next_message_leaky_raw(
 		client: *ws.Client,
 		allocator: std.mem.Allocator,
 		T: type,
@@ -170,6 +168,71 @@ pub const Gateway = struct {
 			.data = parsed,
 			.raw = message,
 		};
+	}
+
+	pub fn nextMessageLeaky(
+		self: *Self,
+		arena: *std.heap.ArenaAllocator,
+	) !Message {
+		const allocator = arena.allocator();
+
+		const proto = blk: {
+			self.client_mutex.lock();
+			defer self.client_mutex.unlock();
+			const proto = try self.client.read() orelse
+				unreachable; // there should never be a ws client timeout
+			break :blk proto;
+		};
+		errdefer self.client.done(proto);
+
+		if (proto.type != .text) {
+			@branchHint(.cold);
+			return error.MessageNotText;
+		}
+
+		const payload = try std.json.parseFromSliceLeaky(
+			struct {
+				op: Opcode,
+				s: ?Sequence = null,
+				t: ?[]const u8 = null,
+			},
+			allocator,
+			proto.data,
+			.{ .ignore_unknown_fields = true }
+		);
+
+		if (payload.op == opcode.heartbeat) {
+			try self.heartbeat_locking();
+			_ = arena.reset(.retain_capacity);
+			return self.nextMessageLeaky(arena);
+		}
+		if (payload.s) |new_sequence| {
+			self.sequence = new_sequence;
+		}
+
+		return Message {
+			.client = &self.client,
+			.client_mutex = &self.client_mutex,
+			.opcode = payload.op,
+			.sequence = payload.s,
+			.@"type" = payload.t,
+			.proto = proto,
+		};
+	}
+};
+
+pub const Message = struct {
+	client: *ws.Client,
+	client_mutex: *std.Thread.Mutex,
+	opcode: Opcode,
+	sequence: ?Sequence,
+	@"type": ?[]const u8,
+	proto: ws.proto.Message,
+
+	pub fn deinit(self: @This()) void {
+		self.client_mutex.lock();
+		self.client.done(self.proto);
+		self.client_mutex.unlock();
 	}
 };
 
