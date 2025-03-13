@@ -32,15 +32,31 @@ pub const Gateway = struct {
 	///
 	/// Assumes Hello is the next thing to be read.
 	pub fn receiveHelloLeaky(
-		self: *Self, arena_allocator: std.mem.Allocator
+		self: *Self,
+		allocator: std.mem.Allocator,
 	) !usize {
-		const hello = try self.nextMessageLeakyUnhandled(
-			arena_allocator,
+		const proto = try self.nextMessageProtoUnhandled();
+		errdefer {
+			self.client_mutex.lock();
+			self.client.done(proto);
+			self.client_mutex.unlock();
+		}
+
+		const hello = std.json.parseFromSliceLeaky(
 			struct {
 				d: struct { heartbeat_interval: usize },
 			},
-		);
-		return hello.data.d.heartbeat_interval;
+			allocator,
+			proto.data,
+			.{ .ignore_unknown_fields = true },
+		) catch |e| {
+			std.log.err(
+				"receive hello failed ({any}) to parse payload: {s}",
+				.{ e, proto.data }
+			);
+			return e;
+		};
+		return hello.d.heartbeat_interval;
 	}
 
 	/// Sends a heartbeat as soon as possible.
@@ -158,15 +174,7 @@ pub const Gateway = struct {
 		thread_heartbeat.detach();
 	}
 
-	/// Gets the next message from the gateway, JSON-parsed into T.
-	///
-	/// Unlike `getMessageLeaky`, this function does not maintain the
-	/// client state or connection.
-	fn nextMessageLeakyUnhandled(
-		self: *Self,
-		allocator: std.mem.Allocator,
-		T: type,
-	) !struct { data: T, proto: ws.proto.Message } {
+	pub fn nextMessageProtoUnhandled(self: *Self) !ws.proto.Message {
 		const proto = blk: {
 			self.client_mutex.lock();
 			defer self.client_mutex.unlock();
@@ -181,13 +189,25 @@ pub const Gateway = struct {
 			return error.MessageNotText;
 		}
 
+		return proto;
+	}
+
+	/// Gets the next message from the gateway, JSON-parsed into T.
+	///
+	/// Unlike `getMessageLeaky`, this function does not maintain the
+	/// client state or connection.
+	fn nextMessageLeakyUnhandled(
+		self: *Self,
+		allocator: std.mem.Allocator,
+		T: type,
+	) !struct { data: T, proto: ws.proto.Message } {
+		const proto = try self.nextMessageProtoUnhandled();
 		const payload = try std.json.parseFromSliceLeaky(
 			T,
 			allocator,
 			proto.data,
 			.{ .ignore_unknown_fields = true }
 		);
-
 		return .{
 			.data = payload,
 			.proto = proto,
