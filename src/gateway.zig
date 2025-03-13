@@ -205,7 +205,12 @@ pub const Gateway = struct {
 			try self.heartbeat();
 			_ = arena.reset(.retain_capacity);
 			return self.nextMessageLeaky(arena);
+		} else if (message.data.op == opcode.heartbeat_ack) {
+			// TODO keep track
+			_ = arena.reset(.retain_capacity);
+			return self.nextMessageLeaky(arena);
 		}
+
 		if (message.data.s) |new_sequence| {
 			self.sequence = new_sequence;
 		}
