@@ -28,7 +28,10 @@ pub const Gateway = struct {
 		self.client = client;
 	}
 
-	fn receive_hello_leaky(
+	/// Reads the heartbeat interval from Hello.
+	///
+	/// Assumes Hello is the next thing to be read.
+	pub fn receiveHelloLeaky(
 		self: *Self, arena_allocator: std.mem.Allocator
 	) !usize {
 		const hello = try self.nextMessageLeakyUnhandled(
@@ -67,7 +70,7 @@ pub const Gateway = struct {
 	/// Sends heartbeats at every `interval` milliseconds.
 	///
 	/// This is an infinite loop which only breaks on errors.
-	pub fn heartbeat_loop(self: *Self, interval: usize) !void {
+	pub fn heartbeatLoop(self: *Self, interval: usize) !void {
 		const sleep_interval = interval * std.time.ns_per_ms;
 		var buffer = HeartbeatBuffer.make();
 		while (true) {
@@ -134,7 +137,7 @@ pub const Gateway = struct {
 		const heartbeat_interval = blk: {
 			defer _ = arena.reset(.retain_capacity);
 			const heartbeat_interval =
-				self.receive_hello_leaky(arena_allocator) catch |e|
+				self.receiveHelloLeaky(arena_allocator) catch |e|
 					switch (e) {
 						error.MessageNotText =>
 							return error.HelloNotText,
@@ -149,7 +152,7 @@ pub const Gateway = struct {
 
 		const thread_heartbeat = try std.Thread.spawn(
 			.{},
-			Self.heartbeat_loop,
+			Self.heartbeatLoop,
 			.{ self, heartbeat_interval }
 		);
 		thread_heartbeat.detach();
