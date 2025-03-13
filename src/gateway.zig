@@ -100,33 +100,6 @@ pub const Gateway = struct {
 		}
 	}
 
-	pub fn go(self: *Self, arena: *std.heap.ArenaAllocator) !void {
-		const arena_allocator = arena.allocator();
-		while (true) {
-			defer _ = arena.reset(.{ .retain_with_limit = 5120 });
-
-			const message = try nextMessageLeakyUnhandled(
-				&self.client, arena_allocator, struct {
-					op: Opcode,
-					s: ?Sequence = null,
-					t: ?[]const u8 = null,
-				}
-			);
-			defer self.client.done(message.raw);
-
-			std.log.info("received {s}", .{ message.raw.data });
-
-			if (message.data.op == opcode.heartbeat) {
-				try self.heartbeat();
-			}
-
-			if (message.data.s) |sequence_new| {
-				std.log.debug("updating sequence to {d}", .{ sequence_new });
-				self.sequence = sequence_new;
-			}
-		}
-	}
-
 	/// Common bot setup.
 	///
 	/// This is a convenience function that:
