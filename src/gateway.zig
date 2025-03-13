@@ -31,8 +31,7 @@ pub const Gateway = struct {
 	fn receive_hello_leaky(
 		self: *Self, arena_allocator: std.mem.Allocator
 	) !usize {
-		const hello = try next_message_leaky_raw(
-			&self.client,
+		const hello = try self.nextMessageLeakyUnhandled(
 			arena_allocator,
 			struct {
 				d: struct { heartbeat_interval: usize },
@@ -87,7 +86,7 @@ pub const Gateway = struct {
 		while (true) {
 			defer _ = arena.reset(.{ .retain_with_limit = 5120 });
 
-			const message = try next_message_leaky_raw(
+			const message = try nextMessageLeakyUnhandled(
 				&self.client, arena_allocator, struct {
 					op: Opcode,
 					s: ?Sequence = null,
@@ -137,8 +136,8 @@ pub const Gateway = struct {
 			const heartbeat_interval =
 				self.receive_hello_leaky(arena_allocator) catch |e|
 					switch (e) {
-						error.message_non_text =>
-							return error.hello_non_text,
+						error.MessageNotText =>
+							return error.HelloNotText,
 						else => return e,
 					};
 			std.log.info("heartbeat interval: {d:.2}s", .{
@@ -157,39 +156,14 @@ pub const Gateway = struct {
 	}
 
 	/// Gets the next message from the gateway, JSON-parsed into T.
-	fn next_message_leaky_raw(
-		client: *ws.Client,
+	///
+	/// Unlike `getMessageLeaky`, this function does not maintain the
+	/// client state or connection.
+	fn nextMessageLeakyUnhandled(
+		self: *Self,
 		allocator: std.mem.Allocator,
 		T: type,
-	) !struct { data: T, raw: ws.proto.Message } {
-		const message = try client.read() orelse
-			unreachable; // there should never be a timeout on the client
-		errdefer client.done(message);
-
-		if (message.type != .text) { return error.message_non_text; }
-
-		const parsed = try std.json.parseFromSliceLeaky(
-			T,
-			allocator,
-			message.data,
-			.{ .ignore_unknown_fields = true },
-		);
-
-		return .{
-			.data = parsed,
-			.raw = message,
-		};
-	}
-
-	/// Gets the next message from the gateway, using an arena to allocate.
-	///
-	/// Warning: this function may reset the arena! (retains capacity)
-	pub fn nextMessageLeaky(
-		self: *Self,
-		arena: *std.heap.ArenaAllocator,
-	) !Message {
-		const allocator = arena.allocator();
-
+	) !struct { data: T, proto: ws.proto.Message } {
 		const proto = blk: {
 			self.client_mutex.lock();
 			defer self.client_mutex.unlock();
@@ -205,32 +179,50 @@ pub const Gateway = struct {
 		}
 
 		const payload = try std.json.parseFromSliceLeaky(
-			struct {
-				op: Opcode,
-				s: ?Sequence = null,
-				t: ?[]const u8 = null,
-			},
+			T,
 			allocator,
 			proto.data,
 			.{ .ignore_unknown_fields = true }
 		);
 
-		if (payload.op == opcode.heartbeat) {
+		return .{
+			.data = payload,
+			.proto = proto,
+		};
+	}
+
+	/// Gets the next message from the gateway, using an arena to allocate.
+	///
+	/// Warning: this function may reset the arena! (retains capacity)
+	pub fn nextMessageLeaky(
+		self: *Self,
+		arena: *std.heap.ArenaAllocator,
+	) !Message {
+		const message = try self.nextMessageLeakyUnhandled(
+			arena.allocator(),
+			struct {
+				op: Opcode,
+				s: ?Sequence = null,
+				t: ?[]const u8 = null,
+			},
+		);
+
+		if (message.data.op == opcode.heartbeat) {
 			try self.heartbeat();
 			_ = arena.reset(.retain_capacity);
 			return self.nextMessageLeaky(arena);
 		}
-		if (payload.s) |new_sequence| {
+		if (message.data.s) |new_sequence| {
 			self.sequence = new_sequence;
 		}
 
 		return Message {
 			.client = &self.client,
 			.client_mutex = &self.client_mutex,
-			.opcode = payload.op,
-			.sequence = payload.s,
-			.@"type" = payload.t,
-			.proto = proto,
+			.opcode = message.data.op,
+			.sequence = message.data.s,
+			.@"type" = message.data.t,
+			.proto = message.proto,
 		};
 	}
 };
