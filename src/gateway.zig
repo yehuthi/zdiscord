@@ -71,16 +71,15 @@ pub const Gateway = struct {
 		) catch unreachable;
 		// TODO: deal with sequence being invalidated in the interim.
 
-		self.client_mutex.lock();
 		std.log.info(
 			"sending heartbeat ({?})",
 			.{ sequence_now },
 		);
+		// client.write is thread-safe, no need to lock
 		self.client.write(message) catch |e|
 			std.debug.panic(
 				"heartbeat write failed {any}", .{ e }
 			);
-		self.client_mutex.unlock();
 	}
 
 	/// Sends heartbeats at every `interval` milliseconds.
@@ -90,12 +89,11 @@ pub const Gateway = struct {
 		const sleep_interval = interval * std.time.ns_per_ms;
 		var buffer = HeartbeatBuffer.make();
 		while (true) {
-			self.client_mutex.lock();
 			std.log.debug("beating from loop (sequence {?})", .{self.sequence});
+			// client.write is thread-safe, no need to lock
 			try self.client.write(
 				try buffer.fmt(self.sequence)
 			);
-			self.client_mutex.unlock();
 			std.time.sleep(sleep_interval);
 		}
 	}
