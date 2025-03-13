@@ -11,6 +11,7 @@ pub const Gateway = struct {
 
 	const Self = @This();
 
+	/// Connects to the websocket endpoint and performs a handshake.
 	pub fn connect(self: *Self, allocator: std.mem.Allocator) !void {
 		const host = "gateway.discord.gg";
 
@@ -27,7 +28,7 @@ pub const Gateway = struct {
 		self.client = client;
 	}
 
-	pub fn receive_hello_leaky(
+	fn receive_hello_leaky(
 		self: *Self, arena_allocator: std.mem.Allocator
 	) !usize {
 		const hello = try next_message_leaky_raw(
@@ -40,7 +41,8 @@ pub const Gateway = struct {
 		return hello.data.d.heartbeat_interval;
 	}
 
-	pub fn heartbeat_locking(self: *Self) !void {
+	/// Sends a heartbeat as soon as possible.
+	pub fn heartbeat(self: *Self) !void {
 		const sequence_now = self.sequence;
 
 		var buffer: [64]u8 = undefined;
@@ -63,6 +65,9 @@ pub const Gateway = struct {
 		self.client_mutex.unlock();
 	}
 
+	/// Sends heartbeats at every `interval` milliseconds.
+	///
+	/// This is an infinite loop which only breaks on errors.
 	pub fn heartbeat_loop(self: *Self, interval: usize) !void {
 		const sleep_interval = interval * std.time.ns_per_ms;
 		var buffer = HeartbeatBuffer.make();
@@ -94,7 +99,7 @@ pub const Gateway = struct {
 			std.log.info("received {s}", .{ message.raw.data });
 
 			if (message.data.op == opcode.heartbeat) {
-				try self.heartbeat_locking();
+				try self.heartbeat();
 			}
 
 			if (message.data.s) |sequence_new| {
@@ -104,7 +109,13 @@ pub const Gateway = struct {
 		}
 	}
 
-	pub fn start(
+	/// Common bot setup.
+	///
+	/// This is a convenience function that:
+	/// 1. `connect`s the bot
+	/// 2. `Identify`s
+	/// 3. Starts a heartbeat thread.
+	pub fn setup(
 		self: *Self,
 		opts: struct {
 			allocator: std.mem.Allocator,
@@ -170,6 +181,9 @@ pub const Gateway = struct {
 		};
 	}
 
+	/// Gets the next message from the gateway, using an arena to allocate.
+	///
+	/// Warning: this function may reset the arena! (retains capacity)
 	pub fn nextMessageLeaky(
 		self: *Self,
 		arena: *std.heap.ArenaAllocator,
@@ -202,7 +216,7 @@ pub const Gateway = struct {
 		);
 
 		if (payload.op == opcode.heartbeat) {
-			try self.heartbeat_locking();
+			try self.heartbeat();
 			_ = arena.reset(.retain_capacity);
 			return self.nextMessageLeaky(arena);
 		}
