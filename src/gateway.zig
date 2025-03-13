@@ -216,29 +216,31 @@ pub const Gateway = struct {
 		}
 
 		return Message {
-			.client = &self.client,
-			.client_mutex = &self.client_mutex,
 			.opcode = message.data.op,
 			.sequence = message.data.s,
 			.@"type" = message.data.t,
 			.proto = message.proto,
 		};
 	}
+
+	pub fn done(self: *Self, message: anytype) void {
+		const proto: ws.proto.Message = switch(@TypeOf(message)) {
+			ws.proto.Message => message,
+			Message => message.proto,
+			else => |T| @compileError(
+				"Gateway.done message must be a gateway message or " ++
+				"a proto message, but found " ++ @typeName(T)
+			),
+		};
+		self.client.done(proto);
+	}
 };
 
 pub const Message = struct {
-	client: *ws.Client,
-	client_mutex: *std.Thread.Mutex,
 	opcode: Opcode,
 	sequence: ?Sequence,
 	@"type": ?[]const u8,
 	proto: ws.proto.Message,
-
-	pub fn deinit(self: @This()) void {
-		self.client_mutex.lock();
-		self.client.done(self.proto);
-		self.client_mutex.unlock();
-	}
 };
 
 /// [Identify](https://discord.com/developers/docs/events/gateway-events#identify) structure.
