@@ -6,7 +6,6 @@ const ws = @import("websocket");
 
 pub const Gateway = struct {
 	client: ws.Client = undefined,
-	client_mutex: std.Thread.Mutex = .{},
 	sequence: ?Sequence = null,
 
 	const Self = @This();
@@ -36,11 +35,7 @@ pub const Gateway = struct {
 		allocator: std.mem.Allocator,
 	) !usize {
 		const proto = try self.nextMessageProtoUnhandled();
-		errdefer {
-			self.client_mutex.lock();
-			self.client.done(proto);
-			self.client_mutex.unlock();
-		}
+		errdefer self.client.done(proto);
 
 		const hello = std.json.parseFromSliceLeaky(
 			struct {
@@ -146,13 +141,8 @@ pub const Gateway = struct {
 	}
 
 	pub fn nextMessageProtoUnhandled(self: *Self) !ws.proto.Message {
-		const proto = blk: {
-			self.client_mutex.lock();
-			defer self.client_mutex.unlock();
-			const proto = try self.client.read() orelse
-				unreachable; // there should never be a ws client timeout
-			break :blk proto;
-		};
+		const proto = try self.client.read() orelse
+			unreachable; // there should never be a ws client timeout
 		errdefer self.client.done(proto);
 
 		if (proto.type != .text) {
