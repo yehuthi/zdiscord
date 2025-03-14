@@ -224,6 +224,42 @@ pub const Gateway = struct {
 		};
 		self.client.done(proto);
 	}
+
+	/// Closes the connection.
+	///
+	/// Use code `1000` or `1001` to disconnect the gateway (making any
+	/// identified bot with it appear offline).
+	/// Use any other code to disconnect the bot but be able to Resume.
+	pub fn close(self: *Self, opts: struct { code: u16 = 1000 }) !void {
+		try self.client.close(.{ .code = opts.code });
+	}
+
+	/// Registers a SIGINT (Ctrl+C) handler that disconnects the gateway
+	/// so it an identified bot will appear offline, before terminating
+	/// the program.
+	///
+	/// Consider it (at least currently) a hacky convenience function
+	/// suitable for small programs. It cannot be used for multiple
+	/// gateways, and and currently only works for POSIX (doesn't work on
+	/// Windows).
+	pub fn sigintRegister(self: *Self) void {
+		const Handler = struct {
+			var gateway_global: ?*Self = null;
+			pub fn handler(_: c_int) callconv(.C) void {
+				gateway_global.?.close(.{}) catch {};
+			}
+		};
+		Handler.gateway_global = self;
+		std.posix.sigaction(
+			std.posix.SIG.INT,
+			&.{
+				.flags = 0,
+				.mask = std.posix.empty_sigset,
+				.handler = .{ .handler = Handler.handler },
+			},
+			null
+		);
+	}
 };
 
 pub const Message = struct {
