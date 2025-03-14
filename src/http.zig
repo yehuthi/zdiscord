@@ -22,7 +22,9 @@ pub fn request(
 	var payload_actual: ?[]const u8 = null;
 	var payload_allocated = false;
 	const Payload = @TypeOf(payload);
-	if (comptime util.isString(Payload)) {
+	if (util.isNull(payload)) {
+		// do nothing
+	} else if (comptime util.isString(Payload)) {
 		payload_actual = payload;
 	} else {
 		payload_actual = try std.json.stringifyAlloc(
@@ -63,6 +65,15 @@ pub fn request(
 }
 
 const util = struct {
+	/// Checks that the given value is null and of an optional type.
+	pub fn isNull(value: anytype) bool {
+		return switch (@typeInfo(@TypeOf(value))) {
+			.null => true,
+			.optional => value == null,
+			else => false,
+		};
+	}
+
 	/// Checks if the given type is a string slice or pointer to a bytes
 	/// array such as the case for string literals.
 	pub fn isString(T: type) bool {
