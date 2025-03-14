@@ -4,9 +4,10 @@ pub fn request(
 	endpoint: anytype,
 	client: *std.http.Client,
 	opts: struct {
+		allocator: std.mem.Allocator,
 		token: ?[]const u8,
 	},
-	payload: ?[]const u8,
+	payload: anytype,
 ) !void {
 	var path_buffer: [512]u8 = undefined;
 	const method, const path = blk: {
@@ -16,6 +17,23 @@ pub fn request(
 		const path =
 			try std.fmt.bufPrint(&path_buffer, path_fmt, path_args);
 		break :blk .{ method, path };
+	};
+
+	var payload_actual: ?[]const u8 = null;
+	var payload_allocated = false;
+	const Payload = @TypeOf(payload);
+	if (comptime util.isString(Payload)) {
+		payload_actual = payload;
+	} else {
+		payload_actual = try std.json.stringifyAlloc(
+			opts.allocator,
+			payload,
+			.{}
+		);
+		payload_allocated = true;
+	}
+	defer if (payload_allocated) {
+		opts.allocator.free(payload_actual.?);
 	};
 
 	const fetch_result = try client.fetch(.{
@@ -35,7 +53,7 @@ pub fn request(
 			.authorization =
 				if (opts.token) |value| .{ .override = value } else .omit,
 		},
-		.payload = payload,
+		.payload = payload_actual,
 	});
 	
 	if (fetch_result.status.class() != .success) {
@@ -45,6 +63,22 @@ pub fn request(
 }
 
 const util = struct {
+	/// Checks if the given type is a string slice or pointer to a bytes
+	/// array such as the case for string literals.
+	pub fn isString(T: type) bool {
+		return switch (@typeInfo(T)) {
+			// .array => |p| return p.child == u8,
+			.pointer => |p| {
+				if (p.child == u8) { return true; }
+				switch (@typeInfo(p.child)) {
+					.array => |a| { return a.child == u8; },
+					else => return false,
+				}
+			},
+			else => false
+		};
+	}
+	
 	/// Tuple -> Types
 	///
 	/// Inverse of [std.meta.Tuple](https://ziglang.org/documentation/0.14.0/std/#std.meta.Tuple)
