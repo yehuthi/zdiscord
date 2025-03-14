@@ -479,7 +479,6 @@ fn HeartbeatBufferSized(SIZE: comptime_int) type {
 				"{?}}}",
 				.{ value }
 			);
-			std.log.debug("DEBUG WROTE {d}: \"{s}\"", .{ wrote.len, wrote });
 			return self.data[0..PREFIX.len + wrote.len];
 		}
 	};
