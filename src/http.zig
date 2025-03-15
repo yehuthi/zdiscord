@@ -11,6 +11,11 @@ pub const Api = struct {
 		};
 	}
 
+	pub fn deinit(self: *@This()) void {
+		self.buffer.deinit();
+		self.http.deinit();
+	}
+
 	pub fn request(
 		self: *@This(),
 		endpoint: anytype,
