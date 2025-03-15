@@ -1,5 +1,39 @@
 const std = @import("std");
 
+pub const Api = struct {
+	http: std.http.Client,
+	buffer: std.ArrayList(u8),
+
+	pub fn init(allocator: std.mem.Allocator) @This() {
+		return @This() {
+			.http = .{ .allocator = allocator },
+			.buffer = std.ArrayList(u8).init(allocator),
+		};
+	}
+
+	pub fn request(
+		self: *@This(),
+		endpoint: anytype,
+		opts: struct {
+			token: ?[]const u8,
+		},
+		payload: anytype,
+		response: anytype,
+	) !Response(response) {
+		return try request_raw(
+			endpoint,
+			&self.http,
+			.{
+				.allocator = self.http.allocator,
+				.token = opts.token,
+				.response_storage = .{ .dynamic = &self.buffer },
+			},
+			payload,
+			response,
+		);
+	}
+};
+
 pub fn ResponseValue(value: anytype) type {
 	const T = @TypeOf(value);
 	const t = @typeInfo(T);
@@ -8,23 +42,34 @@ pub fn ResponseValue(value: anytype) type {
 	} else if (t == .null) { return void; }
 	else { @compileError("expected type or void"); }
 }
-pub fn Response(value: anytype) type {
+
+pub fn Response(comptime T: type) type {
 	return struct {
 		status: std.http.Status,
-		value: ResponseValue(value),
+		value: ResponseValue(std.json.Parsed(T)),
+
+		pub fn deinit(self: *@This()) void { self.value.deinit(); }
 	};
 }
 
-pub inline fn requestLeaky(
+const request_raw = request;
+pub inline fn request(
 	endpoint: anytype,
 	client: *std.http.Client,
 	opts: struct {
 		allocator: std.mem.Allocator,
 		token: ?[]const u8,
+		response_storage: std.http.Client.FetchOptions.ResponseStorage,
 	},
 	payload: anytype,
 	response: anytype,
 ) !Response(response) {
+	const response_needs_parse =
+		@typeInfo(@TypeOf(response)) == .type and @sizeOf(response) > 0;
+	std.debug.assert(
+		if (response_needs_parse) opts.response_storage != .ignore
+	else true);
+
 	var path_buffer: [512]u8 = undefined;
 	const method, const path = blk: {
 		const method = endpoint[0];
@@ -56,17 +101,6 @@ pub inline fn requestLeaky(
 	};
 
 	// response
-	const needs_parse =
-		@typeInfo(@TypeOf(response)) == .type and @sizeOf(response) > 0;
-	var response_storage: std.http.Client.FetchOptions.ResponseStorage =
-		.ignore;
-	var response_buffer = std.ArrayList(u8).init(opts.allocator);
-	if (needs_parse) {
-		response_storage = .{ .dynamic = &response_buffer };
-	}
-	errdefer response_buffer.deinit();
-	// ^ we don't enable to clean on happy path, which is okay since this
-	// is leaky.
 
 	const fetch_result = try client.fetch(.{
 		.method = method,
@@ -86,7 +120,7 @@ pub inline fn requestLeaky(
 				if (opts.token) |value| .{ .override = value } else .omit,
 		},
 		.payload = payload_actual,
-		.response_storage = response_storage,
+		.response_storage = opts.response_storage,
 	});
 	
 	if (fetch_result.status.class() != .success) {
@@ -96,11 +130,16 @@ pub inline fn requestLeaky(
 	const ResponseActual = comptime Response(response);
 	var result: ResponseActual = undefined;
 	result.status = fetch_result.status;
-	if (needs_parse) {
-		result.value = try std.json.parseFromSliceLeaky(
-			(response),
+	if (response_needs_parse) {
+		const input = switch (opts.response_storage) {
+			.ignore => unreachable,
+			.dynamic => |a| a.items,
+			.static => |a| a.items,
+		};
+		result.value = try std.json.parseFromSlice(
+			response,
 			opts.allocator,
-			response_buffer.items,
+			input,
 			.{ .ignore_unknown_fields = true },
 		);
 	} else {
