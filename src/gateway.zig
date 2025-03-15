@@ -10,6 +10,10 @@ pub const Gateway = struct {
 
 	const Self = @This();
 
+	pub fn deinit(self: *Self) void {
+		self.client.deinit();
+	}
+
 	/// Connects to the websocket endpoint and performs a handshake.
 	pub fn connect(self: *Self, allocator: std.mem.Allocator) !void {
 		const host = "gateway.discord.gg";
@@ -107,6 +111,7 @@ pub const Gateway = struct {
 		},
 	) !void {
 		var arena = std.heap.ArenaAllocator.init(opts.allocator);
+		defer arena.deinit();
 		const arena_allocator = arena.allocator();
 
 		try self.connect(opts.allocator);
