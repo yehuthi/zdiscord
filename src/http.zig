@@ -60,6 +60,7 @@ pub inline fn request(
 		allocator: std.mem.Allocator,
 		token: ?[]const u8,
 		response_storage: std.http.Client.FetchOptions.ResponseStorage,
+		comptime leaky: bool = false,
 	},
 	payload: anytype,
 	response: anytype,
@@ -101,7 +102,6 @@ pub inline fn request(
 	};
 
 	// response
-
 	const fetch_result = try client.fetch(.{
 		.method = method,
 		.location = .{ .uri = .{
@@ -136,7 +136,9 @@ pub inline fn request(
 			.dynamic => |a| a.items,
 			.static => |a| a.items,
 		};
-		result.value = try std.json.parseFromSlice(
+		const parse = if (opts.leaky) std.json.parseFromSliceLeaky
+			else std.json.parseFromSlice;
+		result.value = try parse(
 			response,
 			opts.allocator,
 			input,
