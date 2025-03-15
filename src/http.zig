@@ -1,6 +1,21 @@
 const std = @import("std");
 
-pub fn request(
+pub fn ResponseValue(value: anytype) type {
+	const T = @TypeOf(value);
+	const t = @typeInfo(T);
+	if (t == .type) {
+		return if (@sizeOf(value) > 0) value else void;
+	} else if (t == .null) { return void; }
+	else { @compileError("expected type or void"); }
+}
+pub fn Response(value: anytype) type {
+	return struct {
+		status: std.http.Status,
+		value: ResponseValue(value),
+	};
+}
+
+pub inline fn requestLeaky(
 	endpoint: anytype,
 	client: *std.http.Client,
 	opts: struct {
@@ -8,7 +23,8 @@ pub fn request(
 		token: ?[]const u8,
 	},
 	payload: anytype,
-) !void {
+	response: anytype,
+) !Response(response) {
 	var path_buffer: [512]u8 = undefined;
 	const method, const path = blk: {
 		const method = endpoint[0];
@@ -19,6 +35,7 @@ pub fn request(
 		break :blk .{ method, path };
 	};
 
+	// payload
 	var payload_actual: ?[]const u8 = null;
 	var payload_allocated = false;
 	const Payload = @TypeOf(payload);
@@ -38,6 +55,19 @@ pub fn request(
 		opts.allocator.free(payload_actual.?);
 	};
 
+	// response
+	const needs_parse =
+		@typeInfo(@TypeOf(response)) == .type and @sizeOf(response) > 0;
+	var response_storage: std.http.Client.FetchOptions.ResponseStorage =
+		.ignore;
+	var response_buffer = std.ArrayList(u8).init(opts.allocator);
+	if (needs_parse) {
+		response_storage = .{ .dynamic = &response_buffer };
+	}
+	errdefer response_buffer.deinit();
+	// ^ we don't enable to clean on happy path, which is okay since this
+	// is leaky.
+
 	const fetch_result = try client.fetch(.{
 		.method = method,
 		.location = .{ .uri = .{
@@ -56,12 +86,27 @@ pub fn request(
 				if (opts.token) |value| .{ .override = value } else .omit,
 		},
 		.payload = payload_actual,
+		.response_storage = response_storage,
 	});
 	
 	if (fetch_result.status.class() != .success) {
 		std.log.err("request error code {any}", .{ fetch_result.status });
-		return error.BadStatus;
 	}
+
+	const ResponseActual = comptime Response(response);
+	var result: ResponseActual = undefined;
+	result.status = fetch_result.status;
+	if (needs_parse) {
+		result.value = try std.json.parseFromSliceLeaky(
+			(response),
+			opts.allocator,
+			response_buffer.items,
+			.{ .ignore_unknown_fields = true },
+		);
+	} else {
+		result.value = {};
+	}
+	return result;
 }
 
 const util = struct {
